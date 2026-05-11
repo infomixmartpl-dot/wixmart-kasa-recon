@@ -47,7 +47,6 @@ class _ReconViewScreenState extends ConsumerState<ReconViewScreen> with TickerPr
     super.dispose();
   }
 
-  @override
   bool _busy = false;
 
   @override
@@ -403,6 +402,13 @@ class _MatchRowDetailsDialog extends ConsumerWidget {
         ),
       ),
       actions: [
+        // bank_only — кнопка «Намапити вручну» (відкриває пошук кандидатів).
+        if (row.kind == 'bank_only')
+          TextButton.icon(
+            icon: const Icon(Icons.link, size: 16),
+            label: const Text('Намапити вручну'),
+            onPressed: () => _openManualMatchPicker(context, ref),
+          ),
         // Підтвердити / Відхилити — для будь-якого рядка крім bank_only
         // (для bank_only «підтвердити» не має сенсу — нема пари).
         if (row.kind != 'bank_only' && row.kind != 'cash_only') ...[
@@ -439,6 +445,27 @@ class _MatchRowDetailsDialog extends ConsumerWidget {
         TextButton(onPressed: () => Navigator.pop(context), child: const Text('Закрити')),
       ],
     );
+  }
+
+  Future<void> _openManualMatchPicker(BuildContext context, WidgetRef ref) async {
+    final picked = await showDialog<String>(
+      context: context,
+      builder: (_) => _ManualMatchPicker(bankOp: row.bankOp ?? {}, sessionId: row.sessionId),
+    );
+    if (picked == null) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref.read(reconRepoProvider).manualMatch(
+            sessionId: row.sessionId,
+            bankOpId: row.bankOpId!,
+            cashOpId: picked,
+          );
+      ref.invalidate(_rowsProvider);
+      if (context.mounted) Navigator.pop(context);
+      messenger.showSnackBar(const SnackBar(content: Text('Ручний матч створено')));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Помилка: $e')));
+    }
   }
 
   String _kindLabel(String k) => switch (k) {
@@ -486,6 +513,81 @@ class _MatchRowDetailsDialog extends ConsumerWidget {
                 )),
         ],
       ),
+    );
+  }
+}
+
+class _ManualMatchPicker extends ConsumerWidget {
+  const _ManualMatchPicker({required this.bankOp, required this.sessionId});
+  final Map<String, dynamic> bankOp;
+  final String sessionId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Завантажуємо всі рядки сесії — нам потрібні незаматчені каса-операції.
+    final rowsAsync = ref.watch(_rowsProvider((sessionId: sessionId, kind: null)));
+    final cashes = ref.watch(cashAccountsProvider).maybeWhen(
+        data: (l) => {for (final c in l) c.id: c.name1c},
+        orElse: () => <String, String>{});
+
+    final targetAmount = double.tryParse(bankOp['amount']?.toString() ?? '0') ?? 0;
+
+    return AlertDialog(
+      title: Text('Знайти пару для ${bankOp['amount']} грн'),
+      content: SizedBox(
+        width: 720,
+        height: 480,
+        child: rowsAsync.when(
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (e, _) => Text('$e'),
+          data: (rows) {
+            // Кандидати: cash_only або amount_only або fuzzy без user_status=approved.
+            // Сортуємо за близькістю суми.
+            final candidates = rows.where((r) {
+              if (r.kind != 'cash_only' && r.kind != 'amount_only') return false;
+              if (r.cashOp == null) return false;
+              return true;
+            }).toList()
+              ..sort((a, b) {
+                final ap = double.tryParse(a.cashOp?['amount']?.toString() ?? '0') ?? 0;
+                final bp = double.tryParse(b.cashOp?['amount']?.toString() ?? '0') ?? 0;
+                return (ap - targetAmount).abs().compareTo((bp - targetAmount).abs());
+              });
+
+            if (candidates.isEmpty) {
+              return const Center(
+                child: Text('Немає кандидатів — всі каси за період вже зматчено',
+                    style: TextStyle(color: AppColors.muted)),
+              );
+            }
+            return ListView.builder(
+              itemCount: candidates.length,
+              itemBuilder: (_, i) {
+                final r = candidates[i];
+                final c = r.cashOp ?? {};
+                final amount = c['amount']?.toString() ?? '';
+                final date = (c['op_date']?.toString() ?? '').substring(0, 10);
+                final cashName = cashes[c['cash_account_id']] ?? '';
+                return ListTile(
+                  dense: true,
+                  title: Text(
+                      '$date • $amount грн • ${c['op_type'] ?? ''} №${c['doc_number'] ?? ''}'),
+                  subtitle: Text(
+                      '${c['counterparty'] ?? ''}  •  каса: $cashName',
+                      overflow: TextOverflow.ellipsis),
+                  trailing: FilledButton(
+                    onPressed: () => Navigator.pop(context, r.cashOpId),
+                    child: const Text('Вибрати'),
+                  ),
+                );
+              },
+            );
+          },
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Скасувати')),
+      ],
     );
   }
 }
