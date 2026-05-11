@@ -6,7 +6,8 @@ from datetime import timedelta
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -483,3 +484,91 @@ async def delete_all_sessions(fop_id: str, session: AsyncSession = Depends(get_s
     await session.execute(delete(ReconSession).where(ReconSession.id.in_(session_ids)))
     await session.commit()
     return {"deleted": len(session_ids)}
+
+
+class RowStatusUpdate(BaseModel):
+    """approved | rejected | pending."""
+    user_status: str
+
+
+@router.patch("/rows/{row_id}")
+async def update_row_status(
+    row_id: str,
+    payload: RowStatusUpdate,
+    session: AsyncSession = Depends(get_session),
+):
+    """Підтвердити / відхилити рядок звірки.
+
+    - approved: юзер підтверджує що матч правильний (або bank_only треба провести).
+    - rejected: юзер відхиляє (false positive — не та операція).
+    - pending: скинути назад у невирішений стан.
+    """
+    valid = {"approved", "rejected", "pending"}
+    if payload.user_status not in valid:
+        raise HTTPException(status_code=400, detail=f"user_status має бути одним з: {valid}")
+    row = await session.get(MatchRow, row_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Рядок не знайдено")
+    row.user_status = payload.user_status if payload.user_status != "pending" else None
+    if payload.user_status == "approved":
+        row.approved = True
+        from datetime import datetime
+        row.approved_at = datetime.utcnow()
+    else:
+        row.approved = False
+        row.approved_at = None
+    await session.commit()
+    return {"id": row.id, "user_status": row.user_status, "approved": row.approved}
+
+
+class ManualMatchRequest(BaseModel):
+    bank_op_id: str
+    cash_op_id: str
+
+
+@router.post("/{session_id}/manual-match", status_code=status.HTTP_201_CREATED)
+async def manual_match(
+    session_id: str,
+    payload: ManualMatchRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Створити ручний матч bank ↔ cash. Видаляє старі рядки що посилаються
+    на ці bank_op_id / cash_op_id у цій сесії (bank_only / cash_only / fuzzy).
+    """
+    s = await session.get(ReconSession, session_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="Сесію не знайдено")
+    b = await session.get(BankOp, payload.bank_op_id)
+    if not b or b.fop_id != s.fop_id:
+        raise HTTPException(status_code=404, detail="Bank-операція не належить цьому ФОПу")
+    c = await session.get(CashOp, payload.cash_op_id)
+    if not c or c.fop_id != s.fop_id:
+        raise HTTPException(status_code=404, detail="Cash-операція не належить цьому ФОПу")
+
+    # Видаляємо існуючі рядки що посилаються на ці bank/cash у цій сесії.
+    await session.execute(
+        delete(MatchRow).where(
+            MatchRow.session_id == session_id,
+            (MatchRow.bank_op_id == payload.bank_op_id) | (MatchRow.cash_op_id == payload.cash_op_id),
+        )
+    )
+
+    # Створюємо новий manual matchrow.
+    from datetime import datetime
+    new_row = MatchRow(
+        session_id=session_id,
+        kind=MatchKind.FUZZY,
+        bank_op_id=payload.bank_op_id,
+        cash_op_id=payload.cash_op_id,
+        score=100.0,
+        date_diff_days=abs((b.op_date - c.op_date).days),
+        counterparty_similarity=0.0,
+        notes="Ручний матч",
+        manual=True,
+        user_status="approved",
+        approved=True,
+        approved_at=datetime.utcnow(),
+    )
+    session.add(new_row)
+    await session.commit()
+    return {"id": new_row.id, "kind": "fuzzy", "manual": True}

@@ -133,6 +133,8 @@ class MatchRowOut(BaseModel):
     counterparty_similarity: float
     notes: str | None
     approved: bool
+    user_status: str | None = None  # approved | rejected | None=pending
+    manual: bool = False
 
     # Розгорнута інформація для UI — заповнюємо вручну
     bank_op_summary: dict | None = None

@@ -291,5 +291,11 @@ class MatchRow(Base):
     approved: Mapped[bool] = mapped_column(default=False)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime)
     posted_doc_ref: Mapped[str | None] = mapped_column(String(50))  # GUID документа що створили в 1С
+    # Розширений статус: pending (за замовч.) / approved (юзер підтвердив) /
+    # rejected (юзер відхилив, false positive). Зберігаємо як string бо
+    # старі рядки можуть мати тільки approved bool, без user_status.
+    user_status: Mapped[str | None] = mapped_column(String(20), default=None)
+    # true якщо рядок створив юзер вручну через manual-match.
+    manual: Mapped[bool] = mapped_column(default=False)
 
     session: Mapped[ReconSession] = relationship(back_populates="rows")

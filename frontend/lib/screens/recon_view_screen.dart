@@ -403,6 +403,39 @@ class _MatchRowDetailsDialog extends ConsumerWidget {
         ),
       ),
       actions: [
+        // Підтвердити / Відхилити — для будь-якого рядка крім bank_only
+        // (для bank_only «підтвердити» не має сенсу — нема пари).
+        if (row.kind != 'bank_only' && row.kind != 'cash_only') ...[
+          TextButton(
+            onPressed: () async {
+              final messenger = ScaffoldMessenger.of(context);
+              try {
+                await ref.read(reconRepoProvider).setRowStatus(row.id, 'rejected');
+                ref.invalidate(_rowsProvider);
+                if (context.mounted) Navigator.pop(context);
+                messenger.showSnackBar(const SnackBar(content: Text('Рядок відхилено')));
+              } catch (e) {
+                messenger.showSnackBar(SnackBar(content: Text('Помилка: $e')));
+              }
+            },
+            child: const Text('Відхилити', style: TextStyle(color: AppColors.danger)),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.lime),
+            onPressed: () async {
+              final messenger = ScaffoldMessenger.of(context);
+              try {
+                await ref.read(reconRepoProvider).setRowStatus(row.id, 'approved');
+                ref.invalidate(_rowsProvider);
+                if (context.mounted) Navigator.pop(context);
+                messenger.showSnackBar(const SnackBar(content: Text('Рядок підтверджено')));
+              } catch (e) {
+                messenger.showSnackBar(SnackBar(content: Text('Помилка: $e')));
+              }
+            },
+            child: const Text('Підтвердити'),
+          ),
+        ],
         TextButton(onPressed: () => Navigator.pop(context), child: const Text('Закрити')),
       ],
     );
