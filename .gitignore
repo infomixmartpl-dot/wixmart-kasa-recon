@@ -1,0 +1,53 @@
+# macOS
+.DS_Store
+*.swp
+
+# Python — backend + legacy recon CLI
+**/__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+backend/.venv/
+backend/recon.db
+backend/recon.db-journal
+backend/recon.db-shm
+backend/recon.db-wal
+
+# Реальні дані бізнесу — НЕ комітимо
+data/bank/*
+data/1c-export/*
+!data/bank/.gitkeep
+!data/1c-export/.gitkeep
+reports/*
+!reports/.gitkeep
+output/*
+!output/.gitkeep
+
+# Конфіги config/ — комітимо мапінги, але НЕ якщо містять секрети
+# (наразі тримаємо все — там тільки приклади і структура)
+
+# Flutter / Dart
+frontend/build/
+frontend/.dart_tool/
+frontend/.flutter-plugins
+frontend/.flutter-plugins-dependencies
+frontend/.metadata
+frontend/.packages
+frontend/pubspec.lock
+frontend/**/Generated.xcconfig
+frontend/**/Pods/
+frontend/**/Podfile.lock
+frontend/**/ephemeral/
+frontend/**/GeneratedPluginRegistrant.*
+frontend/**/Flutter/Flutter.podspec
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Logs
+*.log
+
+# OS / temp
+.tmp/

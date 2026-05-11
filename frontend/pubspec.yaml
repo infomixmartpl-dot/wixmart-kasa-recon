@@ -1,0 +1,35 @@
+name: kasa_recon
+description: "WixMart Kasa Recon — звірка ПриватБанк ↔ Каса 1С (УНФ)"
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.11.5
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # HTTP клієнт до бекенду
+  dio: ^5.7.0
+
+  # Стан і реактивність
+  flutter_riverpod: ^2.6.0
+
+  # Роутинг
+  go_router: ^14.6.0
+
+  # Файли (file picker при upload)
+  file_picker: ^8.1.4
+
+  # Дата/час форматування
+  intl: ^0.19.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

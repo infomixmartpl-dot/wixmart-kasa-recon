@@ -1,0 +1,67 @@
+name: Build Windows .exe
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:  # ручний запуск з GitHub UI
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.7'
+          channel: stable
+
+      - name: Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: Get dependencies
+        working-directory: frontend
+        run: flutter pub get
+
+      - name: Analyze (no errors only)
+        working-directory: frontend
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - name: Build Windows release
+        working-directory: frontend
+        run: flutter build windows --release
+
+      - name: Pack release artifact
+        working-directory: frontend/build/windows/x64/runner/Release
+        run: |
+          # Тег = ім'я артефакту, інакше дата + sha
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            NAME="kasa_recon-${GITHUB_REF#refs/tags/}"
+          else
+            NAME="kasa_recon-$(date +%Y%m%d)-${GITHUB_SHA::7}"
+          fi
+          echo "ARTIFACT_NAME=$NAME" >> $GITHUB_ENV
+          7z a "../../../../../$NAME.zip" *
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: frontend/${{ env.ARTIFACT_NAME }}.zip
+          retention-days: 30
+
+      - name: Create GitHub Release on tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: frontend/${{ env.ARTIFACT_NAME }}.zip
+          generate_release_notes: true
