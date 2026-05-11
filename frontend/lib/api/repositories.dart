@@ -136,6 +136,57 @@ class SyncRepository {
   }
 }
 
+class ODataRepository {
+  ODataRepository(this._api);
+  final ApiClient _api;
+
+  Future<Map<String, dynamic>> test(String fopId) async {
+    final r = await _api.post<Map<String, dynamic>>('/api/odata/$fopId/test');
+    return r.data ?? {};
+  }
+
+  Future<Map<String, dynamic>> discover(String fopId) async {
+    final r = await _api.post<Map<String, dynamic>>('/api/odata/$fopId/discover');
+    return r.data ?? {};
+  }
+
+  Future<Map<String, dynamic>> syncCatalogs(
+    String fopId, {
+    String? catalogKasa,
+    String? catalogPidrozdil,
+  }) async {
+    final r = await _api.post<Map<String, dynamic>>(
+      '/api/odata/$fopId/sync-catalogs',
+      query: {
+        if (catalogKasa != null) 'catalog_kasa': catalogKasa,
+        if (catalogPidrozdil != null) 'catalog_pidrozdil': catalogPidrozdil,
+      },
+    );
+    return r.data ?? {};
+  }
+
+  Future<Map<String, dynamic>> syncCash({
+    required String fopId,
+    required DateTime periodFrom,
+    required DateTime periodTo,
+    String postuplenieEntity = 'Document_ПоступлениеВКассу',
+    String rashodEntity = 'Document_РасходИзКассы',
+    String peremeshchenieEntity = 'Document_ПеремещениеДенег',
+  }) async {
+    final r = await _api.post<Map<String, dynamic>>(
+      '/api/odata/$fopId/sync-cash',
+      data: {
+        'period_from': _isoDate(periodFrom),
+        'period_to': _isoDate(periodTo),
+        'postuplenie_entity': postuplenieEntity,
+        'rashod_entity': rashodEntity,
+        'peremeshchenie_entity': peremeshchenieEntity,
+      },
+    );
+    return r.data ?? {};
+  }
+}
+
 class ReconRepository {
   ReconRepository(this._api);
   final ApiClient _api;

@@ -18,6 +18,7 @@ final bankAccountRepoProvider = Provider((ref) => BankAccountRepository(ref.read
 final cashAccountRepoProvider = Provider((ref) => CashAccountRepository(ref.read(apiClientProvider)));
 final syncRepoProvider = Provider((ref) => SyncRepository(ref.read(apiClientProvider)));
 final reconRepoProvider = Provider((ref) => ReconRepository(ref.read(apiClientProvider)));
+final odataRepoProvider = Provider((ref) => ODataRepository(ref.read(apiClientProvider)));
 
 /// Список усіх ФОПів — реактивно оновлюється кнопкою «оновити».
 final fopsProvider = FutureProvider<List<Fop>>((ref) async {
