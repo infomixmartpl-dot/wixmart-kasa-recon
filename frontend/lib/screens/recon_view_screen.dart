@@ -249,33 +249,87 @@ class _KindBadge extends StatelessWidget {
   }
 }
 
-class _MatchRowDetailsDialog extends StatelessWidget {
+class _MatchRowDetailsDialog extends ConsumerWidget {
   const _MatchRowDetailsDialog({required this.row});
   final MatchRow row;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final b = row.bankOp;
     final c = row.cashOp;
+
+    // Резолвимо UUID → ім'я каси/банку, щоб юзер бачив реальні назви.
+    final cashes = ref.watch(cashAccountsProvider).maybeWhen(
+        data: (l) => {for (final c in l) c.id: c.name1c},
+        orElse: () => <String, String>{});
+    final banks = ref.watch(bankAccountsProvider).maybeWhen(
+        data: (l) => {for (final b in l) b.id: '${b.label} • ${b.iban}'},
+        orElse: () => <String, String>{});
+
+    // Якщо це пересорт — покажемо «очікувано на касу: X».
+    String? expectedCashName;
+    if (row.expectedCashAccountId != null) {
+      expectedCashName = cashes[row.expectedCashAccountId] ?? row.expectedCashAccountId;
+    }
+
+    // Збагачуємо bankOp і cashOp перед показом — замінюємо id на читабельні поля.
+    Map<String, dynamic>? enrich(Map<String, dynamic>? src, Map<String, String> lookup, String idField) {
+      if (src == null) return null;
+      final out = <String, dynamic>{};
+      src.forEach((k, v) {
+        if (k == idField && v is String) {
+          out['Каса/рахунок'] = lookup[v] ?? v;
+        } else {
+          out[k] = v;
+        }
+      });
+      return out;
+    }
+
+    final bEnriched = enrich(b, banks, 'bank_account_id');
+    final cEnriched = enrich(c, cashes, 'cash_account_id');
+
     return AlertDialog(
-      title: Text('Рядок звірки — ${row.kind}'),
+      title: Text('Рядок звірки — ${_kindLabel(row.kind)}'),
       content: SizedBox(
-        width: 640,
+        width: 720,
         child: SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              if (row.kind == 'peresort' && expectedCashName != null)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: AppColors.danger.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('⚠ Пересорт',
+                          style: TextStyle(fontWeight: FontWeight.w700, color: AppColors.danger)),
+                      const SizedBox(height: 4),
+                      Text('Очікували що проведуть на касу: $expectedCashName',
+                          style: const TextStyle(fontSize: 12)),
+                      if (c?['cash_account_id'] is String)
+                        Text('Фактично провели на касу: ${cashes[c!["cash_account_id"]] ?? c["cash_account_id"]}',
+                            style: const TextStyle(fontSize: 12)),
+                    ],
+                  ),
+                ),
               _section(
                 'Банк (Privat)',
                 AppColors.sea,
-                b,
+                bEnriched,
                 empty: 'Немає пари у банку (документ існує лише в 1С).',
               ),
               const SizedBox(height: 16),
               _section(
                 '1С (Каса)',
                 AppColors.lime,
-                c,
+                cEnriched,
                 empty: 'Немає пари у 1С (банк-операція не проведена як ПКО/ВКО).',
               ),
               if (row.notes != null && row.notes!.isNotEmpty) ...[
@@ -294,6 +348,15 @@ class _MatchRowDetailsDialog extends StatelessWidget {
       ],
     );
   }
+
+  String _kindLabel(String k) => switch (k) {
+        'exact' => 'точний збіг',
+        'fuzzy' => 'нечіткий збіг',
+        'peresort' => 'пересорт',
+        'bank_only' => 'тільки в банку (до проведення)',
+        'cash_only' => 'тільки в касі',
+        _ => k,
+      };
 
   Widget _section(String title, Color color, Map<String, dynamic>? data, {required String empty}) {
     return Container(
@@ -316,7 +379,7 @@ class _MatchRowDetailsDialog extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       SizedBox(
-                        width: 140,
+                        width: 150,
                         child: Text('${e.key}:',
                             style: const TextStyle(fontSize: 12, color: AppColors.muted)),
                       ),
