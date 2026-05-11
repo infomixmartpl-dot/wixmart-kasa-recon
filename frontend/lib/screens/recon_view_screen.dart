@@ -27,10 +27,12 @@ class _ReconViewScreenState extends ConsumerState<ReconViewScreen> with TickerPr
 
   final _kinds = const [
     (label: 'Збіги', kind: null, subset: ['exact', 'fuzzy']),
-    (label: 'За сумою (перевір)', kind: 'amount_only', subset: ['amount_only']),
     (label: 'Пересорт', kind: 'peresort', subset: ['peresort']),
     (label: 'До проведення', kind: 'bank_only', subset: ['bank_only']),
-    (label: 'Питання', kind: 'cash_only', subset: ['cash_only']),
+    // «Питання» — сумнівні: amount_only (слабкий збіг по сумі) + cash_only
+    // ВКО/ПКО які не знайшли пари у банку. Переміщення між внутрішніми
+    // касами автоматично ховаємо — вони не йдуть у банк, тому не предмет звірки.
+    (label: 'Питання', kind: null, subset: ['amount_only', 'cash_only']),
   ];
 
   @override
@@ -114,7 +116,19 @@ class _TabContent extends ConsumerWidget {
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (e, _) => Center(child: Text('$e')),
       data: (rows) {
-        final filtered = rows.where((r) => subset.contains(r.kind)).toList();
+        final filtered = rows.where((r) {
+          if (!subset.contains(r.kind)) return false;
+          // У вкладці «Питання» ховаємо cash_only-Перемещение — це внутрішні
+          // переміщення між касами, до банку не йдуть, у звірці тільки шум.
+          if (r.kind == 'cash_only') {
+            final opType = (r.cashOp ?? {})['op_type']?.toString() ?? '';
+            if (opType.toLowerCase().contains('перемещ') ||
+                opType.toLowerCase().contains('переміщ')) {
+              return false;
+            }
+          }
+          return true;
+        }).toList();
         if (filtered.isEmpty) {
           return const Center(
             child: Padding(
