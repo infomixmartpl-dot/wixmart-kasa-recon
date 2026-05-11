@@ -29,6 +29,28 @@ class DashboardScreen extends ConsumerWidget {
         title: Text('Дашборд • ${fop.name}'),
         actions: [
           IconButton(
+            tooltip: 'Видалити ВСІ звірки',
+            icon: const Icon(Icons.delete_sweep_outlined),
+            onPressed: () async {
+              final messenger = ScaffoldMessenger.of(context);
+              try {
+                final count = await ref.read(reconRepoProvider).deleteAllSessions(fop.id);
+                if (!context.mounted) return;
+                ref.invalidate(reconSessionsProvider);
+                messenger.showSnackBar(SnackBar(
+                  content: Text('Видалено звірок: $count'),
+                  duration: const Duration(seconds: 3),
+                ));
+              } catch (e) {
+                messenger.showSnackBar(SnackBar(
+                  content: Text('Помилка: $e'),
+                  backgroundColor: AppColors.danger,
+                ));
+              }
+            },
+          ),
+          IconButton(
+            tooltip: 'Оновити',
             icon: const Icon(Icons.refresh),
             onPressed: () => ref.invalidate(reconSessionsProvider),
           ),
@@ -128,24 +150,23 @@ class _SessionCard extends ConsumerWidget {
                   IconButton(
                     icon: const Icon(Icons.delete_outline, size: 18, color: AppColors.muted),
                     onPressed: () async {
-                      final ok = await showDialog<bool>(
-                        context: context,
-                        builder: (_) => AlertDialog(
-                          title: const Text('Видалити звірку?'),
-                          content: const Text('Сама звірка зникне, але банк-операції і касові документи лишаться.'),
-                          actions: [
-                            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Скасувати')),
-                            FilledButton(
-                              style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
-                              onPressed: () => Navigator.pop(context, true),
-                              child: const Text('Видалити'),
-                            ),
-                          ],
-                        ),
-                      );
-                      if (ok == true) {
-                        await ref.read(reconRepoProvider).deleteSession(session.id);
+                      // Без модалки confirm — на Windows 8.1 overlay застрягає.
+                      // Замість confirm — SnackBar з «Скасувати» 5 сек.
+                      final repo = ref.read(reconRepoProvider);
+                      final messenger = ScaffoldMessenger.of(context);
+                      try {
+                        await repo.deleteSession(session.id);
+                        if (!context.mounted) return;
                         ref.invalidate(reconSessionsProvider);
+                        messenger.showSnackBar(SnackBar(
+                          content: Text('Звірка ${df.format(session.periodFrom)} – ${df.format(session.periodTo)} видалена'),
+                          duration: const Duration(seconds: 3),
+                        ));
+                      } catch (e) {
+                        messenger.showSnackBar(SnackBar(
+                          content: Text('Помилка видалення: $e'),
+                          backgroundColor: AppColors.danger,
+                        ));
                       }
                     },
                   ),

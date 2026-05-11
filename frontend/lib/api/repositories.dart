@@ -248,6 +248,14 @@ class ReconRepository {
   Future<void> deleteSession(String id) async {
     await _api.delete('/api/recon/$id');
   }
+
+  /// Видалити всі сесії ФОПа.
+  Future<int> deleteAllSessions(String fopId) async {
+    final r = await _api.delete<Map<String, dynamic>>(
+      '/api/recon/sessions/all?fop_id=$fopId',
+    );
+    return (r.data?['deleted'] as int?) ?? 0;
+  }
 }
 
 String _isoDate(DateTime d) =>
