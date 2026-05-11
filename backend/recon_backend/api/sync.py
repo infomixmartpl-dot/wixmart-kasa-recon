@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..core.parse_cash_journal import load_cash_journal
 from ..db.models import BankAccount, BankOp, CashAccount, CashOp, CashOpType, Direction
 from ..db.session import get_session
 
@@ -183,3 +184,102 @@ async def upload_cash_export(
         added += 1
     await session.commit()
     return {"added": added, "duplicates": duplicates, "total_parsed": len(parsed.df), "source": source}
+
+
+@router.post("/cash-journal-upload")
+async def upload_cash_journal(
+    fop_id: str = Form(...),
+    file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_session),
+):
+    """Завантажити повний журнал документів каси з полем «Касса/Счет».
+
+    На відміну від /cash-upload не вимагає вибору каси: парсер сам мапить
+    кожен рядок на відповідну `cash_account` за іменем у колонці «Касса/Счет».
+
+    Один файл = всі каси цього ФОПа. Зручно для першого заливання історії
+    за весь час.
+    """
+    # Збираємо мапінг імен кас → cash_account_id для цього ФОПа.
+    result = await session.execute(select(CashAccount).where(CashAccount.fop_id == fop_id))
+    cash_by_name: dict[str, str] = {}
+    for c in result.scalars():
+        cash_by_name[c.name_1c.strip().lower()] = c.id
+
+    if not cash_by_name:
+        raise HTTPException(
+            status_code=400,
+            detail="У ФОПа немає кас. Спочатку зроби /api/odata/{fop_id}/sync-catalogs",
+        )
+
+    # Зберігаємо upload у тимчасовий файл.
+    suffix = Path(file.filename or "upload.xlsx").suffix or ".xlsx"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        content = await file.read()
+        tmp.write(content)
+        tmp_path = Path(tmp.name)
+
+    try:
+        parsed = load_cash_journal(tmp_path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    type_map = {
+        "ПКО": CashOpType.PKO,
+        "ВКО": CashOpType.VKO,
+        "Перемещение": CashOpType.PEREMESHCHENIE,
+    }
+
+    added = 0
+    duplicates = 0
+    unmapped: dict[str, int] = {}  # назви кас яких нема у БД → кількість рядків
+
+    for row in parsed.rows:
+        key = row.cash_account_name.strip().lower()
+        cash_account_id = cash_by_name.get(key)
+        if not cash_account_id:
+            unmapped[row.cash_account_name] = unmapped.get(row.cash_account_name, 0) + 1
+            continue
+
+        op_type = type_map.get(row.op_type)
+        if op_type is None:
+            continue
+
+        # Дедуплікація за (cash_account, дата, сума, doc_number).
+        doc_num = row.doc_number or None
+        existing = await session.execute(
+            select(CashOp).where(
+                CashOp.cash_account_id == cash_account_id,
+                CashOp.op_date == row.op_date,
+                CashOp.amount == row.amount,
+                CashOp.doc_number == doc_num,
+            )
+        )
+        if existing.scalar_one_or_none():
+            duplicates += 1
+            continue
+
+        session.add(CashOp(
+            fop_id=fop_id,
+            cash_account_id=cash_account_id,
+            op_date=row.op_date,
+            amount=row.amount,
+            op_type=op_type,
+            doc_number=doc_num,
+            counterparty=row.counterparty or None,
+            stattia=row.operation or None,
+            comment=row.structural_unit or None,
+            source="journal_xlsx",
+        ))
+        added += 1
+
+    await session.commit()
+    return {
+        "added": added,
+        "duplicates": duplicates,
+        "total_parsed": len(parsed.rows),
+        "skipped_no_date": parsed.skipped_no_date,
+        "skipped_no_amount": parsed.skipped_no_amount,
+        "skipped_no_cash": parsed.skipped_no_cash,
+        "unmapped_cash_accounts": unmapped,  # назви які не знайдено у БД
+    }

@@ -134,6 +134,23 @@ class SyncRepository {
     );
     return r.data ?? {};
   }
+
+  /// Завантажити повний журнал документів каси — один файл, всі каси.
+  /// Парсер мапить рядки на каси за полем «Касса/Счет».
+  Future<Map<String, dynamic>> uploadCashJournal({
+    required String fopId,
+    required String filePath,
+    required String filename,
+  }) async {
+    final r = await _api.upload<Map<String, dynamic>>(
+      '/api/sync/cash-journal-upload',
+      fieldName: 'file',
+      filePath: filePath,
+      filename: filename,
+      data: {'fop_id': fopId},
+    );
+    return r.data ?? {};
+  }
 }
 
 class ODataRepository {

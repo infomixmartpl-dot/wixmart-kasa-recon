@@ -76,10 +76,23 @@ class _UploadScreenState extends ConsumerState<UploadScreen> {
             ),
             const SizedBox(height: 16),
 
+            // Журнал транзакцій — БАГАТО кас у одному файлі (рекомендується)
+            _UploadCard(
+              icon: Icons.list_alt,
+              title: 'Журнал документів каси — ВСІ каси одним файлом',
+              description:
+                  'XLSX з колонкою «Касса/Счет». Парсер сам розкладає документи по касах '
+                  '(не треба вибирати касу). Рекомендується для першого заливання історії.',
+              accountLabel: '',
+              accountSelector: const SizedBox.shrink(),
+              onPick: () => _pickAndUploadJournal(fopId: fop.id),
+            ),
+            const SizedBox(height: 16),
+
             // Вивантаження УНФ
             _UploadCard(
               icon: Icons.account_balance,
-              title: 'Вивантаження каси з УНФ',
+              title: 'Вивантаження каси з УНФ — одна каса',
               description:
                   'XLSX — журнал документів або звіт «Движение денег». Програма авто-визначає формат.',
               accountLabel: 'Каса в 1С',
@@ -174,6 +187,46 @@ class _UploadScreenState extends ConsumerState<UploadScreen> {
             'додано ${r['added']}, дублів ${r['duplicates']}, всього ${r['total_parsed']}'
             '${r['source'] != null ? ' (${r['source']})' : ''}';
       });
+    } catch (e) {
+      setState(() {
+        _busy = false;
+        _lastResult = '✗ Помилка: $e';
+      });
+    }
+  }
+
+  Future<void> _pickAndUploadJournal({required String fopId}) async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['xlsx', 'xls'],
+    );
+    if (result == null || result.files.isEmpty) return;
+    final file = result.files.first;
+    if (file.path == null) return;
+
+    setState(() {
+      _busy = true;
+      _lastResult = null;
+    });
+    try {
+      final r = await ref.read(syncRepoProvider).uploadCashJournal(
+            fopId: fopId,
+            filePath: file.path!,
+            filename: file.name,
+          );
+      final unmapped = (r['unmapped_cash_accounts'] as Map?) ?? {};
+      final unmappedNote = unmapped.isEmpty
+          ? ''
+          : ' • не знайдено кас у БД: ${unmapped.length} '
+              '(${unmapped.entries.take(3).map((e) => "${e.key}=${e.value}").join(", ")}${unmapped.length > 3 ? "..." : ""})';
+      setState(() {
+        _busy = false;
+        _lastResult =
+            'Журнал «${file.name}»: '
+            'додано ${r['added']}, дублів ${r['duplicates']}, '
+            'всього розпарсено ${r['total_parsed']}$unmappedNote';
+      });
+      ref.invalidate(cashAccountsProvider);
     } catch (e) {
       setState(() {
         _busy = false;
