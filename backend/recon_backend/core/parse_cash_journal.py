@@ -110,9 +110,12 @@ def load_cash_journal(path: Path) -> CashJournalResult:
     df.columns = [str(c).strip() for c in df.columns]
 
     # Auto-detect tree-формату звіту «Движение денег».
+    # ВАЖЛИВО: з цього звіту беремо ТІЛЬКИ переміщення. Бо у ПКО/ВКО з нього
+    # нема прізвищ клієнтів — а ці типи зазвичай вже залиті з «Список transaction»
+    # (з прізвищами). Інакше були б дублі + втрата контрагентів.
     cols_lower = {str(c).lower() for c in df.columns}
     if any("оступл" in c for c in cols_lower) and any("асход" in c for c in cols_lower):
-        return _load_dvizhenie_report_tree(df)
+        return _load_dvizhenie_report_tree(df, only_transfers=True)
 
     # Знайти потрібні колонки за нормалізованим іменем.
     # ВАЖЛИВО: кандидати ідуть від більш специфічних → до менш специфічних.
@@ -215,8 +218,12 @@ def load_cash_journal(path: Path) -> CashJournalResult:
     )
 
 
-def _load_dvizhenie_report_tree(df: pd.DataFrame) -> CashJournalResult:
+def _load_dvizhenie_report_tree(df: pd.DataFrame, *, only_transfers: bool = False) -> CashJournalResult:
     """Парсер звіту «Движение денег» (tree-формат).
+
+    only_transfers=True — повертати ТІЛЬКИ переміщення (ПКО/ВКО ігноруються).
+        Корисно коли ПКО/ВКО вже залиті з іншого джерела з прізвищами,
+        а з цього звіту треба тільки переміщення яких не вистачає.
 
     Структура:
         Банковский счет, касса / Документ движения | Поступление | Расход | Чистый
@@ -224,13 +231,6 @@ def _load_dvizhenie_report_tree(df: pd.DataFrame) -> CashJournalResult:
           Поступление в кассу 4345 от 19.09.2022   | 1476        |         | ...
           Расход из кассы 1918 от 21.09.2022       |             | 1500    | ...
           Перемещение денег 894 от 19.09.2022      |             | 12000   | ...
-
-    Логіка:
-    - Якщо рядок не починається з 'Поступление/Расход/Перемещение' → header каси.
-    - Якщо документ — витягуємо тип, номер, дату; сума з колонки Поступление|Расход.
-    - Перемещение з Расход → ВКО (з точки зору каси-відправника).
-    - Перемещение з Поступление → ПКО (з точки зору каси-одержувача).
-      Це коректно для матчингу: bank OUT шукає ВКО, bank IN — ПКО.
     """
     import re as _re
 
@@ -274,6 +274,12 @@ def _load_dvizhenie_report_tree(df: pd.DataFrame) -> CashJournalResult:
             current_kasa = first_val
             continue
 
+        is_transfer = "перемещ" in low or "переміщ" in low
+        # only_transfers=True — пропускаємо ПКО/ВКО, бо вони мають кращу
+        # версію у іншому файлі (з прізвищами клієнтів).
+        if only_transfers and not is_transfer:
+            continue
+
         m = doc_re.match(first_val)
         if not m:
             continue
@@ -290,29 +296,33 @@ def _load_dvizhenie_report_tree(df: pd.DataFrame) -> CashJournalResult:
         amount_out = _parse_amount(raw[rashod_col])
 
         if amount_in is not None and amount_in > 0:
-            op_type = "ПКО"
+            # Для переміщень: amount у Поступление = каса-одержувач.
+            # Для звичайних ПКО — це прихід. У БД пишемо op_type=Перемещение
+            # якщо це переміщення, інакше ПКО.
+            op_type = "Перемещение" if is_transfer else "ПКО"
             amount = amount_in
         elif amount_out is not None and amount_out > 0:
-            op_type = "ВКО"
+            op_type = "Перемещение" if is_transfer else "ВКО"
             amount = amount_out
         else:
             skipped_no_amount += 1
             continue
 
-        # Якщо це переміщення — у comment зберігаємо повний рядок щоб юзер
-        # бачив що це не звичайне ПКО/ВКО.
-        is_transfer = "перемещ" in low or "переміщ" in low
-        comment = first_val if is_transfer else ""
+        # Документ-номер з префіксом «ПЕРЕМ-» / «ПКО-» / «ВКО-» щоб не
+        # колідувати з номерами з «Список transaction» (НФНФ-XXXXXX).
+        # Краще створити унікальний ключ ніж випадково перетертися дублем.
+        prefix = "ПЕРЕМ" if is_transfer else type_text.upper().replace(" ", "")[:5]
+        unique_doc = f"{prefix}-{doc_number}"
 
         rows.append(CashJournalRow(
             op_date=op_date,
-            doc_number=doc_number,
+            doc_number=unique_doc,
             amount=amount,
             op_type=op_type,
             cash_account_name=current_kasa,
             counterparty="",
             operation=type_text.strip(),
-            comment=comment,
+            comment=first_val,  # повний рядок для детального перегляду
             structural_unit="",
         ))
 
