@@ -39,7 +39,9 @@ class _UploadScreenState extends ConsumerState<UploadScreen> {
               icon: Icons.credit_card,
               title: 'Виписка ПриватБанк',
               description:
-                  'CSV або XLSX експорт з Privat24 Business. Виписка прив\'язується до конкретного банк-рахунку.',
+                  'CSV або XLSX експорт з Privat24 Business. У файлі може бути '
+                  'декілька IBAN — вибери «Авто-визначити з IBAN у файлі» і парсер '
+                  'розкладе кожен рядок на свій банк-рахунок.',
               accountLabel: 'Банк-рахунок',
               accountSelector: banksAsync.when(
                 loading: () => const LinearProgressIndicator(),
@@ -55,12 +57,16 @@ class _UploadScreenState extends ConsumerState<UploadScreen> {
                   return DropdownButtonFormField<String>(
                     value: _selectedBankId,
                     decoration: const InputDecoration(border: OutlineInputBorder()),
-                    items: banks
-                        .map((b) => DropdownMenuItem(
-                              value: b.id,
-                              child: Text('${b.label} • ${b.iban}', overflow: TextOverflow.ellipsis),
-                            ))
-                        .toList(),
+                    items: [
+                      const DropdownMenuItem(
+                        value: '__auto__',
+                        child: Text('🔍 Авто-визначити з IBAN у файлі (мульти-IBAN)'),
+                      ),
+                      ...banks.map((b) => DropdownMenuItem(
+                            value: b.id,
+                            child: Text('${b.label} • ${b.iban}', overflow: TextOverflow.ellipsis),
+                          )),
+                    ],
                     onChanged: (v) => setState(() => _selectedBankId = v),
                   );
                 },
@@ -70,7 +76,7 @@ class _UploadScreenState extends ConsumerState<UploadScreen> {
                   : () => _pickAndUpload(
                         isPrivat: true,
                         fopId: fop.id,
-                        accountId: _selectedBankId!,
+                        accountId: _selectedBankId == '__auto__' ? '' : _selectedBankId!,
                         allowedExtensions: ['csv', 'xlsx', 'xls'],
                       ),
             ),

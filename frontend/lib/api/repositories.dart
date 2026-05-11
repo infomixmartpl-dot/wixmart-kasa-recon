@@ -109,12 +109,17 @@ class SyncRepository {
     required String filePath,
     required String filename,
   }) async {
+    // Якщо bankAccountId порожній — backend auto-визначить по IBAN з файлу.
+    final data = <String, dynamic>{'fop_id': fopId};
+    if (bankAccountId.isNotEmpty) {
+      data['bank_account_id'] = bankAccountId;
+    }
     final r = await _api.upload<Map<String, dynamic>>(
       '/api/sync/privat-upload',
       fieldName: 'file',
       filePath: filePath,
       filename: filename,
-      data: {'fop_id': fopId, 'bank_account_id': bankAccountId},
+      data: data,
     );
     return r.data ?? {};
   }

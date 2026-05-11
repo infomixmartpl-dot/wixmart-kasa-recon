@@ -35,18 +35,33 @@ router = APIRouter()
 @router.post("/privat-upload")
 async def upload_privat_statement(
     fop_id: str = Form(...),
-    bank_account_id: str = Form(...),
+    bank_account_id: str | None = Form(None),
     file: UploadFile = File(...),
     session: AsyncSession = Depends(get_session),
 ):
-    """Завантажити CSV/XLSX виписку Privat для конкретного банк-рахунку.
+    """Завантажити CSV/XLSX виписку Privat.
 
-    Перевіряє що bank_account належить fop. Парсить файл, додає рядки в bank_op.
-    Не дублює — якщо (fop_id, bank_account_id, op_date, amount, doc_number) уже є — пропускає.
+    Два режими:
+    - bank_account_id переданий → всі рядки прив'язуються до цього рахунку.
+    - bank_account_id порожній → парсер auto-визначає IBAN з колонки
+      «Ваш рахунок» у виписці і мапить рядок на bank_account з тим IBAN
+      у БД. Якщо IBAN не знайдено — рядок іде в `unmapped_ibans`.
     """
-    acc = await session.get(BankAccount, bank_account_id)
-    if not acc or acc.fop_id != fop_id:
-        raise HTTPException(status_code=404, detail="Банк-рахунок не належить цьому ФОПу")
+    if bank_account_id:
+        acc = await session.get(BankAccount, bank_account_id)
+        if not acc or acc.fop_id != fop_id:
+            raise HTTPException(status_code=404, detail="Банк-рахунок не належить цьому ФОПу")
+
+    # Збираємо мапінг IBAN → bank_account_id для auto-detect.
+    bank_q = await session.execute(
+        select(BankAccount).where(BankAccount.fop_id == fop_id)
+    )
+    by_iban: dict[str, str] = {}
+    for b in bank_q.scalars():
+        # Нормалізуємо IBAN — без пробілів, верхній регістр.
+        normalized = (b.iban or "").replace(" ", "").upper()
+        if normalized:
+            by_iban[normalized] = b.id
 
     # Зберігаємо upload у тимчасовий файл.
     suffix = Path(file.filename or "upload.csv").suffix or ".csv"
@@ -62,15 +77,35 @@ async def upload_privat_statement(
 
     added = 0
     duplicates = 0
+    unmapped_ibans: dict[str, int] = {}
+    by_iban_added: dict[str, int] = {}
+
     for _, row in parsed.df.iterrows():
         op_date = row["date"].date() if pd.notna(row["date"]) else None
         if not op_date or row["amount"] is None:
             continue
+
+        # Визначаємо bank_account_id для цього рядка.
+        if bank_account_id:
+            row_bank_id = bank_account_id
+        else:
+            row_iban_raw = ""
+            if isinstance(row.get("raw"), dict):
+                row_iban_raw = str(row["raw"].get("Ваш рахунок", "")).replace(" ", "").upper()
+            row_bank_id = by_iban.get(row_iban_raw)
+            if not row_bank_id:
+                unmapped_ibans[row_iban_raw or "(порожній)"] = (
+                    unmapped_ibans.get(row_iban_raw or "(порожній)", 0) + 1
+                )
+                continue
+
         # Дедуплікація по (account, дата, сума, doc_number).
         doc_num = str(row["raw"].get("Номер документу", "")).strip() or None
+        if not doc_num and isinstance(row.get("raw"), dict):
+            doc_num = str(row["raw"].get("№", "")).strip() or None
         existing = await session.execute(
             select(BankOp).where(
-                BankOp.bank_account_id == bank_account_id,
+                BankOp.bank_account_id == row_bank_id,
                 BankOp.op_date == op_date,
                 BankOp.amount == row["amount"],
                 BankOp.doc_number == doc_num,
@@ -81,7 +116,7 @@ async def upload_privat_statement(
             continue
         bop = BankOp(
             fop_id=fop_id,
-            bank_account_id=bank_account_id,
+            bank_account_id=row_bank_id,
             op_date=op_date,
             amount=row["amount"],
             direction=Direction(row["direction"]),
@@ -94,8 +129,15 @@ async def upload_privat_statement(
         )
         session.add(bop)
         added += 1
+        by_iban_added[row_bank_id] = by_iban_added.get(row_bank_id, 0) + 1
     await session.commit()
-    return {"added": added, "duplicates": duplicates, "total_parsed": len(parsed.df)}
+    return {
+        "added": added,
+        "duplicates": duplicates,
+        "total_parsed": len(parsed.df),
+        "by_bank_account": by_iban_added,
+        "unmapped_ibans": unmapped_ibans,
+    }
 
 
 @router.post("/cash-upload")
