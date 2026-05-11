@@ -126,10 +126,21 @@ def load_cash_journal(path: Path) -> CashJournalResult:
     col_operation = find_col("операц")
     col_unit = find_col("структурн")
 
-    if not (col_date and col_amount and col_cash):
+    # Журнал «Перемещения денег» з УНФ — інший формат:
+    # Дата | Номер | Откуда | Куда | Сумма документа.
+    # Замість «Касса/Счет» — окремі поля «Откуда» (відправник) і «Куда».
+    col_from = find_col("откуда", "звідки", "відправник", "источник", "источн")
+    col_to = find_col("куда", "куди", "получатель", "одержувач", "приёмник", "получ")
+    is_transfer_journal = col_from is not None and col_cash is None
+
+    if not col_date or not col_amount:
         raise RuntimeError(
-            f"Файл не схожий на журнал транзакцій. Знайдено колонки: {list(df.columns)}. "
-            f"Очікую щонайменше: Дата, Сумма, Касса/Счет."
+            f"Файл не схожий на журнал. Знайдено колонки: {list(df.columns)}. "
+            f"Очікую щонайменше: Дата, Сумма."
+        )
+    if not col_cash and not col_from:
+        raise RuntimeError(
+            f"Файл не має ні «Касса/Счет», ні «Откуда». Колонки: {list(df.columns)}."
         )
 
     rows: list[CashJournalRow] = []
@@ -146,7 +157,12 @@ def load_cash_journal(path: Path) -> CashJournalResult:
         if amount_signed is None:
             skipped_no_amount += 1
             continue
-        raw_cash = raw[col_cash]
+        # Журнал переміщень: cash_account = «Откуда» (відправник).
+        # Стандартний журнал: cash_account = «Касса/Счет».
+        if is_transfer_journal:
+            raw_cash = raw[col_from]
+        else:
+            raw_cash = raw[col_cash]
         if pd.isna(raw_cash):
             skipped_no_cash += 1
             continue
@@ -156,7 +172,16 @@ def load_cash_journal(path: Path) -> CashJournalResult:
             continue
 
         operation = str(raw[col_operation] or "").strip() if col_operation else ""
-        op_type = _classify_op_type(amount_signed, operation)
+        if is_transfer_journal:
+            op_type = "Перемещение"
+            # У comment ховаємо «Куда» — інформативно при ручному перегляді.
+            to_name = ""
+            if col_to is not None and not pd.isna(raw[col_to]):
+                to_name = str(raw[col_to]).strip()
+            comment = f"Куди: {to_name}" if to_name else ""
+        else:
+            op_type = _classify_op_type(amount_signed, operation)
+            comment = ""
 
         rows.append(CashJournalRow(
             op_date=op_date,
@@ -165,8 +190,8 @@ def load_cash_journal(path: Path) -> CashJournalResult:
             op_type=op_type,
             cash_account_name=cash_name,
             counterparty=str(raw[col_counter] or "").strip() if col_counter else "",
-            operation=operation,
-            comment="",
+            operation=operation or ("Переміщення" if is_transfer_journal else ""),
+            comment=comment,
             structural_unit=str(raw[col_unit] or "").strip() if col_unit else "",
         ))
 
