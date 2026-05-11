@@ -225,7 +225,7 @@ class ReconRepository {
     required DateTime periodFrom,
     required DateTime periodTo,
     int dateWindowDays = 14,
-    int fuzzyNameThreshold = 85,
+    int fuzzyNameThreshold = 70,
   }) async {
     final r = await _api.post<Map<String, dynamic>>('/api/recon/run', data: {
       'fop_id': fopId,

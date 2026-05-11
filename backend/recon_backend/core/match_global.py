@@ -98,15 +98,24 @@ def _date_diff(d1: date, d2: date) -> int:
 
 
 def _name_sim(a: str, b: str) -> float:
+    """Найкраща схожість двох строк — макс з token_set_ratio і partial_ratio.
+
+    - token_set_ratio: ігнорує порядок слів, дублікати — добре для імен.
+    - partial_ratio: знаходить найкращу підстроку — добре коли одне поле
+      містить інше з зайвим текстом.
+    """
     if not a or not b:
         return 0.0
-    return float(fuzz.token_set_ratio(a.lower(), b.lower()))
+    al, bl = a.lower(), b.lower()
+    return float(max(
+        fuzz.token_set_ratio(al, bl),
+        fuzz.partial_ratio(al, bl),
+    ))
 
 
 def _purpose_sim(purpose: str, hint: str) -> float:
-    if not purpose or not hint:
-        return 0.0
-    return float(fuzz.partial_ratio(purpose.lower(), hint.lower()))
+    """Те саме що _name_sim — лишаю окрему функцію для семантики."""
+    return _name_sim(purpose, hint)
 
 
 # ─── Головна функція ───────────────────────────────────────────────────
