@@ -16,11 +16,14 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 
 from rapidfuzz import fuzz
+
+_WORD_RE = re.compile(r"[А-Яа-яA-Za-zЇїІіЄєҐґ']+")
 
 
 @dataclass(frozen=True)
@@ -116,6 +119,22 @@ def _name_sim(a: str, b: str) -> float:
 def _purpose_sim(purpose: str, hint: str) -> float:
     """Те саме що _name_sim — лишаю окрему функцію для семантики."""
     return _name_sim(purpose, hint)
+
+
+def _significant_words(text: str, min_len: int = 4) -> set[str]:
+    """Слова довжиною ≥min_len з тексту, нормалізовані lower-case."""
+    if not text:
+        return set()
+    return {w.lower() for w in _WORD_RE.findall(text) if len(w) >= min_len}
+
+
+def _shared_significant_words(a: str, b: str, min_len: int = 4) -> set[str]:
+    """Спільні значущі слова (≥min_len букв) між двома рядками.
+
+    Призначено для пошуку прізвищ: 'ПИСАРЕНКО' є і в банк-purpose,
+    і у каса-counterparty → це майже точно один і той же платіж.
+    """
+    return _significant_words(a, min_len) & _significant_words(b, min_len)
 
 
 # ─── Головна функція ───────────────────────────────────────────────────
@@ -252,6 +271,7 @@ def reconcile_global(
         best_score: float = 0.0
         best_sim: float = 0.0
         best_dd: int = 0
+        best_shared: set[str] = set()
 
         for cop in _candidates(bop):
             if cop.id in cash_matched:
@@ -275,6 +295,11 @@ def reconcile_global(
             cash_has_name = bool(cash_name_pool.strip())
 
             if cash_has_name:
+                # ШВИДКА перевірка: чи є спільні значущі слова (прізвище)?
+                # Якщо так — це майже точно один платіж, дозволяємо матч навіть
+                # при низькому ratio (бо ratio може бути низьким через зайвий
+                # текст у purpose типу 'Платник: ІПН3496012433 ...').
+                shared = _shared_significant_words(bank_name_pool, cash_name_pool)
                 # Беремо МАКСИМАЛЬНУ схожість серед усіх крос-перевірок:
                 #   bank.counterparty ↔ cash.counterparty
                 #   bank.counterparty ↔ cash.(dok_osnova/comment)
@@ -287,9 +312,14 @@ def reconcile_global(
                 # Загальний крос-pool теж — щоб точно нічого не упустити.
                 sim_pool = _name_sim(bank_name_pool, cash_name_pool)
                 sim_row = max(sim_c2c, sim_c2d, sim_p2c, sim_p2d, sim_pool)
-                if sim_row < name_threshold:
+                # Pass якщо: схожість ≥ поріг АБО є спільне прізвище.
+                if sim_row < name_threshold and not shared:
                     continue
+                # Якщо знайдене спільне слово — бонус +20 до скору щоб
+                # такі матчі мали пріоритет.
                 row_score = sim_row - dd * 1.5
+                if shared:
+                    row_score = max(row_score, 70.0) + len(shared) * 10 - dd * 1.5
             else:
                 # Сліпий матчинг (звіт без контрагента) — менший вікно і нижчий скор.
                 if dd > blind_date_window_days:
@@ -302,6 +332,7 @@ def reconcile_global(
                 best_score = row_score
                 best_sim = sim_row
                 best_dd = dd
+                best_shared = shared if cash_has_name else set()
 
         if best_cop is not None:
             bank_matched.add(bop.id)
@@ -309,9 +340,11 @@ def reconcile_global(
             is_peresort = expected_cash and best_cop.cash_account_id != expected_cash
             kind = "peresort_fuzzy" if is_peresort else "fuzzy"
             notes = []
+            if best_shared:
+                notes.append(f"Спільні слова: {', '.join(sorted(best_shared))}")
             if best_sim:
                 notes.append(f"Нечіткий збіг {best_sim:.0f}%")
-            else:
+            elif not best_shared:
                 notes.append("Сліпий збіг — контрагент у касі відсутній")
             if best_dd > 0:
                 notes.append(f"Різниця дат {best_dd} дн.")
