@@ -179,7 +179,27 @@ def load_privat_statement(path: str | Path) -> PrivatParseResult:
         raise FileNotFoundError(f"Виписка не знайдена: {path}")
 
     if path.suffix.lower() in {".xlsx", ".xls"}:
-        raw_df = pd.read_excel(path, dtype=str)
+        # XLSX-виписки Privat24 Business мають кілька рядків шапки звіту
+        # (назва банку, дата звіту, період) перед справжнім header. Шукаємо
+        # рядок зі знайомими колонками і використовуємо його як header.
+        raw_no_header = pd.read_excel(path, dtype=str, header=None)
+        header_keywords = {
+            "дата проводки", "сума", "сумма", "призначення", "контрагент",
+            "ваш рахунок", "ебрпоу", "edrpou", "iban",
+        }
+        header_row = None
+        for i in range(min(20, len(raw_no_header))):
+            cells = [str(v).strip().lower() for v in raw_no_header.iloc[i] if pd.notna(v)]
+            matches = sum(1 for c in cells if any(k in c for k in header_keywords))
+            if matches >= 3:
+                header_row = i
+                break
+        if header_row is not None:
+            raw_df = raw_no_header.iloc[header_row + 1:].reset_index(drop=True)
+            raw_df.columns = [str(v).strip() if pd.notna(v) else f"col_{i}"
+                              for i, v in enumerate(raw_no_header.iloc[header_row])]
+        else:
+            raw_df = pd.read_excel(path, dtype=str)
         encoding_used = "binary-excel"
         delimiter_used = "n/a"
     else:
