@@ -255,6 +255,26 @@ class ReconRepository {
     return ReconSession.fromJson(r.data!);
   }
 
+  /// Підтвердити / відхилити / скинути рядок звірки.
+  Future<void> setRowStatus(String rowId, String userStatus) async {
+    await _api.patch<Map<String, dynamic>>(
+      '/api/recon/rows/$rowId',
+      data: {'user_status': userStatus},
+    );
+  }
+
+  /// Створити ручний матч bank ↔ cash у сесії.
+  Future<void> manualMatch({
+    required String sessionId,
+    required String bankOpId,
+    required String cashOpId,
+  }) async {
+    await _api.post<Map<String, dynamic>>(
+      '/api/recon/$sessionId/manual-match',
+      data: {'bank_op_id': bankOpId, 'cash_op_id': cashOpId},
+    );
+  }
+
   /// Видалити всі сесії ФОПа.
   Future<int> deleteAllSessions(String fopId) async {
     final r = await _api.delete<Map<String, dynamic>>(

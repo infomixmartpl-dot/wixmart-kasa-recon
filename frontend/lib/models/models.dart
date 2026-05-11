@@ -180,13 +180,15 @@ class MatchRow {
     this.counterpartySimilarity = 0,
     this.notes,
     this.approved = false,
+    this.userStatus,
+    this.manual = false,
     this.bankOp,
     this.cashOp,
   });
 
   final String id;
   final String sessionId;
-  final String kind; // exact | fuzzy | peresort | bank_only | cash_only
+  final String kind; // exact | fuzzy | amount_only | peresort | bank_only | cash_only
   final String? bankOpId;
   final String? cashOpId;
   final String? expectedCashAccountId;
@@ -195,6 +197,8 @@ class MatchRow {
   final double counterpartySimilarity;
   final String? notes;
   final bool approved;
+  final String? userStatus; // approved | rejected | null=pending
+  final bool manual;
   final Map<String, dynamic>? bankOp;
   final Map<String, dynamic>? cashOp;
 
@@ -211,6 +215,8 @@ class MatchRow {
             (j['counterparty_similarity'] as num?)?.toDouble() ?? 0,
         notes: j['notes'] as String?,
         approved: (j['approved'] as bool?) ?? false,
+        userStatus: j['user_status'] as String?,
+        manual: (j['manual'] as bool?) ?? false,
         bankOp: j['bank_op_summary'] as Map<String, dynamic>?,
         cashOp: j['cash_op_summary'] as Map<String, dynamic>?,
       );

@@ -47,9 +47,18 @@ async_session = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncS
 
 
 async def init_db() -> None:
-    """Створити всі таблиці. Викликається при старті FastAPI lifespan."""
+    """Створити всі таблиці + легкі міграції для існуючих БД."""
+    from sqlalchemy import text
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Міграція v2: додати match_row.user_status і .manual якщо ще нема.
+        r = await conn.execute(text("PRAGMA table_info(match_row)"))
+        cols = {row[1] for row in r.fetchall()}
+        if "user_status" not in cols:
+            await conn.execute(text("ALTER TABLE match_row ADD COLUMN user_status VARCHAR(20)"))
+        if "manual" not in cols:
+            await conn.execute(text("ALTER TABLE match_row ADD COLUMN manual BOOLEAN DEFAULT 0 NOT NULL"))
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:
