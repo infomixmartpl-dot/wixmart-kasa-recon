@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.match_global import BankOpData, CashOpData, reconcile_global
@@ -306,6 +306,9 @@ async def delete_session(session_id: str, session: AsyncSession = Depends(get_se
     s = await session.get(ReconSession, session_id)
     if not s:
         raise HTTPException(status_code=404, detail="Сесію не знайдено")
+    # Спочатку явно видаляємо MatchRow — у async lazy-load для ORM cascade
+    # зависає, тому робимо чисте DELETE statement.
+    await session.execute(delete(MatchRow).where(MatchRow.session_id == session_id))
     await session.delete(s)
     await session.commit()
     return None
