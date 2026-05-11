@@ -137,6 +137,25 @@ def _shared_significant_words(a: str, b: str, min_len: int = 4) -> set[str]:
     return _significant_words(a, min_len) & _significant_words(b, min_len)
 
 
+def _similar_word_pairs(a: str, b: str, min_len: int = 5, threshold: float = 75.0) -> set[tuple[str, str]]:
+    """Знайти пари слів з обох рядків які схожі на ≥threshold %.
+
+    Ловить варіанти прізвищ з різними закінченнями: «Рубанська» (банк)
+    vs «Рубанський» (1С) — корінь однаковий, fuzz.ratio ~84.
+    Або «Левченко» vs «Левч.» — abbreviation.
+    """
+    a_words = [w.lower() for w in _WORD_RE.findall(a) if len(w) >= min_len]
+    b_words = [w.lower() for w in _WORD_RE.findall(b) if len(w) >= min_len]
+    matches: set[tuple[str, str]] = set()
+    for aw in a_words:
+        for bw in b_words:
+            if aw == bw:
+                continue  # точні збіги ловить _shared_significant_words
+            if fuzz.ratio(aw, bw) >= threshold:
+                matches.add((aw, bw))
+    return matches
+
+
 # ─── Головна функція ───────────────────────────────────────────────────
 
 
@@ -300,6 +319,12 @@ def reconcile_global(
                 # при низькому ratio (бо ratio може бути низьким через зайвий
                 # текст у purpose типу 'Платник: ІПН3496012433 ...').
                 shared = _shared_significant_words(bank_name_pool, cash_name_pool)
+                # ТАКОЖ: різні форми прізвища (Рубанська/Рубанський, Левченко/Левч.).
+                # Шукаємо пари слів з ratio ≥75%.
+                similar_pairs = _similar_word_pairs(bank_name_pool, cash_name_pool)
+                # Об'єднуємо в один індикатор «знайдено спільне прізвище».
+                if similar_pairs:
+                    shared = shared | {f"{a}~{b}" for a, b in similar_pairs}
                 # Беремо МАКСИМАЛЬНУ схожість серед усіх крос-перевірок:
                 #   bank.counterparty ↔ cash.counterparty
                 #   bank.counterparty ↔ cash.(dok_osnova/comment)
