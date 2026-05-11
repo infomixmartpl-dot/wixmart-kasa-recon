@@ -12,8 +12,8 @@
 block_cipher = None
 
 a = Analysis(
-    ['recon_backend/launcher.py'],
-    pathex=[],
+    ['run_backend.py'],
+    pathex=['.'],
     binaries=[],
     datas=[],
     hiddenimports=[
