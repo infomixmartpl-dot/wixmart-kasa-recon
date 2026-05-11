@@ -27,6 +27,7 @@ class _ReconViewScreenState extends ConsumerState<ReconViewScreen> with TickerPr
 
   final _kinds = const [
     (label: 'Збіги', kind: null, subset: ['exact', 'fuzzy']),
+    (label: 'За сумою (перевір)', kind: 'amount_only', subset: ['amount_only']),
     (label: 'Пересорт', kind: 'peresort', subset: ['peresort']),
     (label: 'До проведення', kind: 'bank_only', subset: ['bank_only']),
     (label: 'Питання', kind: 'cash_only', subset: ['cash_only']),
@@ -268,6 +269,7 @@ class _TabContent extends ConsumerWidget {
   Color _kindColor(String kind) => switch (kind) {
         'exact' => AppColors.lime,
         'fuzzy' => AppColors.sea,
+        'amount_only' => AppColors.warn,
         'peresort' => AppColors.danger,
         'bank_only' => AppColors.warn,
         _ => AppColors.muted,

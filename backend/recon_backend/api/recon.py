@@ -29,6 +29,7 @@ router = APIRouter()
 _KIND_MAP = {
     "exact": MatchKind.EXACT,
     "fuzzy": MatchKind.FUZZY,
+    "amount_only": MatchKind.AMOUNT_ONLY,
     "peresort_exact": MatchKind.PERESORT,
     "peresort_fuzzy": MatchKind.PERESORT,
     "bank_only": MatchKind.BANK_ONLY,
