@@ -221,7 +221,6 @@ async def sync_catalogs(
 async def sync_cash_from_odata(
     fop_id: str,
     body: SyncCashRequest,
-    override: ODataConfigOverride | None = None,
     session: AsyncSession = Depends(get_session),
 ):
     """Затягнути всі касові документи (ПКО, ВКО, Перемещение) за період у нашу БД.
@@ -253,7 +252,7 @@ async def sync_cash_from_odata(
     for entity in body.transfer_documents:
         entity_pairs.append((entity, CashOpType.PEREMESHCHENIE))
 
-    async with await _build_client(session, fop_id, override) as client:
+    async with await _build_client(session, fop_id, None) as client:
         for entity, op_type in entity_pairs:
             stats = await _sync_one_doc_type(
                 client, session, fop_id, entity, op_type,
