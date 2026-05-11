@@ -13,6 +13,7 @@ dependencies:
 
   # HTTP клієнт до бекенду
   dio: ^5.7.0
+  http: ^1.2.2  # тільки для BackendSupervisor /health пінгу (без cookies/interceptors)
 
   # Стан і реактивність
   flutter_riverpod: ^2.6.0
