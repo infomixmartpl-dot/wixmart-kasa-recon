@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import '../screens/accounts_screen.dart';
 import '../screens/dashboard_screen.dart';
 import '../screens/home_screen.dart';
+import '../screens/odata_screen.dart';
 import '../screens/recon_view_screen.dart';
 import '../screens/upload_screen.dart';
 import '../widgets/app_shell.dart';
@@ -23,6 +24,7 @@ final appRouter = GoRouter(
         GoRoute(path: '/dashboard', builder: (_, __) => const DashboardScreen()),
         GoRoute(path: '/accounts', builder: (_, __) => const AccountsScreen()),
         GoRoute(path: '/upload', builder: (_, __) => const UploadScreen()),
+        GoRoute(path: '/odata', builder: (_, __) => const OdataScreen()),
         GoRoute(
           path: '/recon/:sessionId',
           builder: (_, state) => ReconViewScreen(sessionId: state.pathParameters['sessionId']!),

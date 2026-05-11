@@ -51,6 +51,7 @@ class AppShell extends ConsumerWidget {
                 _NavItem(label: 'Дашборд', icon: Icons.dashboard_outlined, route: '/dashboard', active: loc == '/dashboard'),
                 _NavItem(label: 'Рахунки і каси', icon: Icons.account_balance_wallet_outlined, route: '/accounts', active: loc == '/accounts'),
                 _NavItem(label: 'Завантаження', icon: Icons.upload_file_outlined, route: '/upload', active: loc == '/upload'),
+                _NavItem(label: '1С OData', icon: Icons.cloud_sync_outlined, route: '/odata', active: loc == '/odata'),
                 const Spacer(),
                 if (fop != null)
                   Container(
