@@ -314,6 +314,92 @@ async def delete_session(session_id: str, session: AsyncSession = Depends(get_se
     return None
 
 
+@router.post("/{session_id}/rerun", response_model=ReconSessionOut)
+async def rerun_session(session_id: str, session: AsyncSession = Depends(get_session)):
+    """Перерахувати сесію тими ж параметрами (period, dateWindow, threshold).
+
+    Видаляє існуючі MatchRow і запускає matchінг наново з поточними даними
+    у БД (наприклад, якщо щойно залив нові документи).
+    """
+    s = await session.get(ReconSession, session_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="Сесію не знайдено")
+
+    # Видаляємо старі рядки.
+    await session.execute(delete(MatchRow).where(MatchRow.session_id == session_id))
+
+    # Витягуємо BankOp і CashOp за період.
+    bank_q = await session.execute(
+        select(BankOp).where(
+            BankOp.fop_id == s.fop_id,
+            BankOp.op_date >= s.period_from,
+            BankOp.op_date <= s.period_to,
+        )
+    )
+    bank_ops_db = list(bank_q.scalars())
+    cash_q = await session.execute(
+        select(CashOp).where(
+            CashOp.fop_id == s.fop_id,
+            CashOp.op_date >= s.period_from,
+            CashOp.op_date <= s.period_to,
+        )
+    )
+    cash_ops_db = list(cash_q.scalars())
+
+    bank_data = [
+        BankOpData(
+            id=b.id, op_date=b.op_date, amount=Decimal(b.amount),
+            direction=b.direction.value if hasattr(b.direction, "value") else str(b.direction),
+            bank_account_id=b.bank_account_id,
+            counterparty=b.counterparty or "", edrpou=b.edrpou or "", purpose=b.purpose or "",
+        ) for b in bank_ops_db
+    ]
+    cash_data = [
+        CashOpData(
+            id=c.id, op_date=c.op_date, amount=Decimal(c.amount),
+            op_type=c.op_type.value if hasattr(c.op_type, "value") else str(c.op_type),
+            cash_account_id=c.cash_account_id,
+            counterparty=c.counterparty or "", edrpou=c.edrpou or "",
+            pidrozdil_id=c.pidrozdil_id or "",
+            dok_osnova=c.dok_osnova or "", comment=c.comment or "",
+        ) for c in cash_ops_db
+    ]
+
+    mapping = await _load_bank_to_cash_mapping(session, s.fop_id)
+    outcomes = reconcile_global(
+        bank_data, cash_data,
+        bank_to_cash_mapping=mapping,
+        date_window_days=s.date_window_days,
+        name_threshold=s.fuzzy_name_threshold,
+    )
+
+    for o in outcomes:
+        session.add(MatchRow(
+            session_id=s.id,
+            kind=_KIND_MAP.get(o.kind, MatchKind.BANK_ONLY),
+            bank_op_id=o.bank_op_id,
+            cash_op_id=o.cash_op_id,
+            expected_cash_account_id=o.expected_cash_account_id,
+            score=o.score,
+            date_diff_days=o.date_diff_days,
+            counterparty_similarity=o.counterparty_similarity,
+            notes="; ".join(o.notes) if o.notes else None,
+        ))
+    await session.commit()
+    await session.refresh(s)
+    stats = await _load_session_stats(session, s)
+    return ReconSessionOut(
+        id=s.id, fop_id=s.fop_id,
+        period_from=s.period_from, period_to=s.period_to,
+        status=s.status.value,
+        date_window_days=s.date_window_days,
+        fuzzy_name_threshold=s.fuzzy_name_threshold,
+        created_at=s.created_at, posted_at=s.posted_at,
+        total_bank_ops=len(bank_data), total_cash_ops=len(cash_data),
+        **stats,
+    )
+
+
 @router.delete("/sessions/all", status_code=status.HTTP_200_OK)
 async def delete_all_sessions(fop_id: str, session: AsyncSession = Depends(get_session)):
     """Видалити ВСІ сесії звірки для ФОПа — швидке очищення чорнеток."""

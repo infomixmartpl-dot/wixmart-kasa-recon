@@ -249,6 +249,12 @@ class ReconRepository {
     await _api.delete('/api/recon/$id');
   }
 
+  /// Перерахувати існуючу сесію — очистити рядки і заново зматчити.
+  Future<ReconSession> rerun(String sessionId) async {
+    final r = await _api.post<Map<String, dynamic>>('/api/recon/$sessionId/rerun');
+    return ReconSession.fromJson(r.data!);
+  }
+
   /// Видалити всі сесії ФОПа.
   Future<int> deleteAllSessions(String fopId) async {
     final r = await _api.delete<Map<String, dynamic>>(

@@ -45,10 +45,23 @@ class _ReconViewScreenState extends ConsumerState<ReconViewScreen> with TickerPr
   }
 
   @override
+  bool _busy = false;
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Звірка'),
+        actions: [
+          IconButton(
+            tooltip: 'Перерахувати — заново зматчити цю сесію з поточними даними',
+            icon: _busy
+                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.refresh),
+            onPressed: _busy ? null : _rerun,
+          ),
+          const SizedBox(width: 8),
+        ],
         bottom: TabBar(
           controller: _tabs,
           tabs: _kinds.map((k) => Tab(text: k.label)).toList(),
@@ -59,6 +72,30 @@ class _ReconViewScreenState extends ConsumerState<ReconViewScreen> with TickerPr
         children: _kinds.map((k) => _TabContent(sessionId: widget.sessionId, kind: k.kind, subset: k.subset)).toList(),
       ),
     );
+  }
+
+  Future<void> _rerun() async {
+    setState(() => _busy = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref.read(reconRepoProvider).rerun(widget.sessionId);
+      // Інвалідуємо рядки і список сесій щоб дашборд оновився.
+      ref.invalidate(_rowsProvider);
+      ref.invalidate(reconSessionsProvider);
+      if (!context.mounted) return;
+      messenger.showSnackBar(const SnackBar(
+        content: Text('Сесію перераховано'),
+        duration: Duration(seconds: 2),
+      ));
+    } catch (e) {
+      if (!context.mounted) return;
+      messenger.showSnackBar(SnackBar(
+        content: Text('Помилка перерахунку: $e'),
+        backgroundColor: AppColors.danger,
+      ));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 }
 
