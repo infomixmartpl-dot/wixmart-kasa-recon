@@ -14,9 +14,10 @@ class ApiClient {
           BaseOptions(
             baseUrl: baseUrl,
             connectTimeout: const Duration(seconds: 10),
-            // Sync-cash з 1С при fallback на повний fetch може йти кілька хвилин
-            // на великих базах. Тримаємо великий timeout щоб UI не падав.
-            receiveTimeout: const Duration(minutes: 10),
+            // Sync-cash з 1С при fallback на повний fetch може йти ДЕСЯТКИ
+            // хвилин на великих базах (107К документів за всю історію).
+            // 30 хв — комфортна межа щоб UI не падав під час OData sync.
+            receiveTimeout: const Duration(minutes: 30),
             sendTimeout: const Duration(minutes: 5),
             headers: {'Accept': 'application/json'},
             // Не кидаємо exception на 4xx — обробляємо у викликаючому коді.
