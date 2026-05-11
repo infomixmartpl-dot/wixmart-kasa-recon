@@ -107,10 +107,13 @@ def load_cash_journal(path: Path) -> CashJournalResult:
     df.columns = [str(c).strip() for c in df.columns]
 
     # Знайти потрібні колонки за нормалізованим іменем.
+    # ВАЖЛИВО: кандидати ідуть від більш специфічних → до менш специфічних.
+    # Для КОЖНОГО кандидата окремо пройти всі колонки — щоб НЕ вибрати
+    # 'Касса ККМ' замість 'Касса/Счет' лише тому що 'касса' матчить першу.
     def find_col(*candidates: str) -> str | None:
-        for col in df.columns:
-            norm = str(col).strip().lower().replace("ё", "е")
-            for cand in candidates:
+        for cand in candidates:
+            for col in df.columns:
+                norm = str(col).strip().lower().replace("ё", "е")
                 if cand in norm:
                     return col
         return None
@@ -143,8 +146,12 @@ def load_cash_journal(path: Path) -> CashJournalResult:
         if amount_signed is None:
             skipped_no_amount += 1
             continue
-        cash_name = str(raw[col_cash] or "").strip()
-        if not cash_name:
+        raw_cash = raw[col_cash]
+        if pd.isna(raw_cash):
+            skipped_no_cash += 1
+            continue
+        cash_name = str(raw_cash).strip()
+        if not cash_name or cash_name.lower() == "nan":
             skipped_no_cash += 1
             continue
 
