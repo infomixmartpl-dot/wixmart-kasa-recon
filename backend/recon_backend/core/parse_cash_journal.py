@@ -105,8 +105,33 @@ def load_cash_journal(path: Path) -> CashJournalResult:
     - «Список transaction»: Дата + Касса/Счет + Сумма + Операция.
     - «Перемещения денег»: Дата + Откуда + Куда + Сумма.
     - «Движение денег» (звіт-tree): Банковский счет, касса + Поступление + Расход.
+
+    У звітах 1С зазвичай перший рядок — назва звіту (наприклад «Движение денег
+    за январь 2019 г. – май 2026 г.»), а реальні заголовки колонок нижче.
+    Тому шукаємо рядок з ключовими словами і використовуємо його як header.
     """
-    df = pd.read_excel(path, dtype=object)
+    # Спочатку читаємо БЕЗ header — шукаємо рядок зі справжніми назвами колонок.
+    df_raw = pd.read_excel(path, dtype=object, header=None)
+
+    header_keywords = {"дата", "сумма", "сума", "поступл", "расход", "откуда", "куда", "касса", "каса"}
+    header_row = None
+    for i in range(min(20, len(df_raw))):
+        cells = [str(v).strip().lower() for v in df_raw.iloc[i] if pd.notna(v)]
+        # Рахуємо скільки cells містять хоч одне ключове слово.
+        matches = sum(1 for c in cells if any(k in c for k in header_keywords))
+        if matches >= 2:
+            header_row = i
+            break
+
+    if header_row is not None and header_row > 0:
+        df = df_raw.iloc[header_row + 1:].reset_index(drop=True)
+        df.columns = [str(v).strip() if pd.notna(v) else f"col_{i}"
+                      for i, v in enumerate(df_raw.iloc[header_row])]
+    else:
+        # Стандартний випадок — header у першому рядку.
+        df = df_raw.iloc[1:].reset_index(drop=True) if header_row == 0 else df_raw
+        df.columns = [str(v).strip() if pd.notna(v) else f"col_{i}"
+                      for i, v in enumerate(df_raw.iloc[header_row or 0])]
     df.columns = [str(c).strip() for c in df.columns]
 
     # Auto-detect tree-формату звіту «Движение денег».
