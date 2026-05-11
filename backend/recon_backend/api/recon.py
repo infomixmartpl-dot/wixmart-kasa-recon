@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.match_global import BankOpData, CashOpData, reconcile_global
@@ -200,6 +200,20 @@ async def list_sessions(fop_id: str, session: AsyncSession = Depends(get_session
     out = []
     for s in sessions:
         stats = await _load_session_stats(session, s)
+        bank_count = await session.execute(
+            select(func.count(BankOp.id)).where(
+                BankOp.fop_id == s.fop_id,
+                BankOp.op_date >= s.period_from,
+                BankOp.op_date <= s.period_to,
+            )
+        )
+        cash_count = await session.execute(
+            select(func.count(CashOp.id)).where(
+                CashOp.fop_id == s.fop_id,
+                CashOp.op_date >= s.period_from,
+                CashOp.op_date <= s.period_to,
+            )
+        )
         out.append(ReconSessionOut(
             id=s.id,
             fop_id=s.fop_id,
@@ -210,6 +224,8 @@ async def list_sessions(fop_id: str, session: AsyncSession = Depends(get_session
             fuzzy_name_threshold=s.fuzzy_name_threshold,
             created_at=s.created_at,
             posted_at=s.posted_at,
+            total_bank_ops=bank_count.scalar() or 0,
+            total_cash_ops=cash_count.scalar() or 0,
             **stats,
         ))
     return out
