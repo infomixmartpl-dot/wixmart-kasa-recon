@@ -28,18 +28,25 @@ class _OdataScreenState extends ConsumerState<OdataScreen> {
   DateTime _periodFrom = DateTime(DateTime.now().year, DateTime.now().month, 1);
   DateTime _periodTo = DateTime.now();
 
-  // Налаштовувані назви EntitySet (різні УНФ-конфігурації мають різні).
-  final _postuplenie = TextEditingController(text: 'Document_ПоступлениеВКассу');
-  final _rashod = TextEditingController(text: 'Document_РасходИзКассы');
-  final _peremeshchenie = TextEditingController(text: 'Document_ПеремещениеДенег');
+  // Налаштовувані списки документів (defaults підходять для УНФ 1.6 для України).
+  final _inDocuments = TextEditingController(
+    text: 'Document_ПоступлениеВКассу, Document_ПоступлениеНаСчет',
+  );
+  final _outDocuments = TextEditingController(
+    text: 'Document_РасходИзКассы, Document_РасходСоСчета',
+  );
+  final _transferDocuments = TextEditingController(text: 'Document_ПеремещениеДС');
 
   @override
   void dispose() {
-    _postuplenie.dispose();
-    _rashod.dispose();
-    _peremeshchenie.dispose();
+    _inDocuments.dispose();
+    _outDocuments.dispose();
+    _transferDocuments.dispose();
     super.dispose();
   }
+
+  List<String> _parseList(TextEditingController c) =>
+      c.text.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
 
   @override
   Widget build(BuildContext context) {
@@ -135,17 +142,37 @@ class _OdataScreenState extends ConsumerState<OdataScreen> {
                   const SizedBox(height: 12),
                   ExpansionTile(
                     tilePadding: EdgeInsets.zero,
-                    title: const Text('Назви EntitySet (для нестандартних конфігурацій)',
+                    title: const Text('Назви EntitySet (через кому, для нестандартних конфігурацій)',
                         style: TextStyle(fontSize: 12, color: AppColors.muted)),
                     children: [
-                      TextField(controller: _postuplenie, decoration: const InputDecoration(labelText: 'Поступление')),
+                      TextField(
+                        controller: _inDocuments,
+                        decoration: const InputDecoration(
+                          labelText: 'Прихід (через кому)',
+                          helperText: 'Готівка + Безготівка',
+                        ),
+                        maxLines: 2,
+                      ),
                       const SizedBox(height: 8),
-                      TextField(controller: _rashod, decoration: const InputDecoration(labelText: 'Расход')),
+                      TextField(
+                        controller: _outDocuments,
+                        decoration: const InputDecoration(
+                          labelText: 'Розхід (через кому)',
+                        ),
+                        maxLines: 2,
+                      ),
                       const SizedBox(height: 8),
-                      TextField(controller: _peremeshchenie, decoration: const InputDecoration(labelText: 'Перемещение')),
+                      TextField(
+                        controller: _transferDocuments,
+                        decoration: const InputDecoration(
+                          labelText: 'Переміщення',
+                        ),
+                      ),
                       const SizedBox(height: 8),
-                      const Text('Якщо «Перерахувати EntitySet» показує інші назви — вставляй сюди.',
-                          style: TextStyle(fontSize: 11, color: AppColors.muted)),
+                      const Text(
+                        'Defaults підходять для УНФ 1.6 для України. Якщо «Перерахувати EntitySet» показує інші назви — вставляй сюди через кому.',
+                        style: TextStyle(fontSize: 11, color: AppColors.muted),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 12),
@@ -253,9 +280,9 @@ class _OdataScreenState extends ConsumerState<OdataScreen> {
             fopId: fop.id,
             periodFrom: _periodFrom,
             periodTo: _periodTo,
-            postuplenieEntity: _postuplenie.text.trim(),
-            rashodEntity: _rashod.text.trim(),
-            peremeshchenieEntity: _peremeshchenie.text.trim(),
+            inDocuments: _parseList(_inDocuments),
+            outDocuments: _parseList(_outDocuments),
+            transferDocuments: _parseList(_transferDocuments),
           );
     } catch (e) {
       _error = '$e';

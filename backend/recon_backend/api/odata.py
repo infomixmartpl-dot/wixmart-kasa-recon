@@ -40,13 +40,25 @@ class ODataConfigOverride(BaseModel):
 
 
 class SyncCashRequest(BaseModel):
+    """Параметри синку касових/банк-документів.
+
+    В УНФ 1.6 для України прихід/розхід поділено на готівку і безготівку:
+    - готівка: ПоступлениеВКассу / РасходИзКассы (використовує Catalog_Кассы)
+    - безготівка: ПоступлениеНаСчет / РасходСоСчета (використовує Catalog_БанковскиеСчета)
+
+    Тому документи задаються списком — за замовч. підтягуємо обидва типи.
+    """
     period_from: date
     period_to: date
-    # Назви EntitySet — налаштовуваним бо різні конфігурації УНФ можуть називати по-різному.
-    postuplenie_entity: str = "Document_ПоступлениеВКассу"
-    rashod_entity: str = "Document_РасходИзКассы"
-    peremeshchenie_entity: str = "Document_ПеремещениеДенег"
-    # Опційно — обмежити певною касою (cash_account_id з нашої БД, ми зматчимо через odata_ref).
+    in_documents: list[str] = [
+        "Document_ПоступлениеВКассу",
+        "Document_ПоступлениеНаСчет",
+    ]
+    out_documents: list[str] = [
+        "Document_РасходИзКассы",
+        "Document_РасходСоСчета",
+    ]
+    transfer_documents: list[str] = ["Document_ПеремещениеДС"]
     cash_account_id: str | None = None
 
 
@@ -121,19 +133,25 @@ async def discover_entities(
 @router.post("/{fop_id}/sync-catalogs")
 async def sync_catalogs(
     fop_id: str,
-    catalog_kasa: str = "Catalog_БанковскиеСчетаКассы",
-    catalog_pidrozdil: str = "Catalog_Подразделения",
+    catalog_kasy: list[str] | None = None,
+    catalog_pidrozdil: str = "Catalog_СтруктурныеЕдиницы",
     override: ODataConfigOverride | None = None,
     session: AsyncSession = Depends(get_session),
 ):
     """Затягнути каси/рахунки і підрозділи з 1С у нашу БД.
 
-    Дедуплікує по полі `odata_ref` (GUID документа в 1С). Якщо запис уже є —
-    оновлює назву (бо в 1С могли перейменувати).
+    В УНФ 1.6 для України каси і банк-рахунки — це ДВА окремі довідники:
+    `Catalog_Кассы` (готівка) і `Catalog_БанковскиеСчета` (безготівка).
+    Тому `catalog_kasy` приймає список — за замовч. обидва.
+
+    Підрозділи в УНФ — `Catalog_СтруктурныеЕдиницы` (не `Подразделения`).
     """
     fop = await session.get(Fop, fop_id)
     if not fop:
         raise HTTPException(status_code=404, detail="ФОП не знайдено")
+
+    if catalog_kasy is None:
+        catalog_kasy = ["Catalog_Кассы", "Catalog_БанковскиеСчета"]
 
     added_cash = 0
     updated_cash = 0
@@ -142,28 +160,31 @@ async def sync_catalogs(
     errors: list[str] = []
 
     async with await _build_client(session, fop_id, override) as client:
-        # Каси
-        try:
-            kasy = await client.fetch_all(catalog_kasa)
-        except OData1CError as e:
-            errors.append(f"Каси: {e}")
-            kasy = []
-        for item in kasy:
-            ref = item.get("Ref_Key")
-            name = item.get("Description") or item.get("Name")
-            if not (ref and name):
+        # Каси і банк-рахунки.
+        for entity in catalog_kasy:
+            try:
+                kasy = await client.fetch_all(entity)
+            except OData1CError as e:
+                errors.append(f"{entity}: {e}")
                 continue
-            existing = await session.execute(
-                select(CashAccount).where(CashAccount.odata_ref == ref)
-            )
-            row = existing.scalar_one_or_none()
-            if row:
-                if row.name_1c != name:
-                    row.name_1c = name
-                    updated_cash += 1
-            else:
-                session.add(CashAccount(fop_id=fop_id, name_1c=name, odata_ref=ref, kind="bank"))
-                added_cash += 1
+            # Тип: bank якщо це БанковскиеСчета, інакше cash.
+            kind = "bank" if "Банковск" in entity else "cash"
+            for item in kasy:
+                ref = item.get("Ref_Key")
+                name = item.get("Description") or item.get("Name")
+                if not (ref and name):
+                    continue
+                existing = await session.execute(
+                    select(CashAccount).where(CashAccount.odata_ref == ref)
+                )
+                row = existing.scalar_one_or_none()
+                if row:
+                    if row.name_1c != name:
+                        row.name_1c = name
+                        updated_cash += 1
+                else:
+                    session.add(CashAccount(fop_id=fop_id, name_1c=name, odata_ref=ref, kind=kind))
+                    added_cash += 1
 
         # Підрозділи
         try:
@@ -223,12 +244,17 @@ async def sync_cash_from_odata(
     summary: dict[str, dict[str, int]] = {}
     expand = ["Контрагент", "Подразделение"]
 
+    # Готуємо пари (entity_name, op_type) — підтримуємо списки документів.
+    entity_pairs: list[tuple[str, CashOpType]] = []
+    for entity in body.in_documents:
+        entity_pairs.append((entity, CashOpType.PKO))
+    for entity in body.out_documents:
+        entity_pairs.append((entity, CashOpType.VKO))
+    for entity in body.transfer_documents:
+        entity_pairs.append((entity, CashOpType.PEREMESHCHENIE))
+
     async with await _build_client(session, fop_id, override) as client:
-        for entity, op_type in [
-            (body.postuplenie_entity, CashOpType.PKO),
-            (body.rashod_entity, CashOpType.VKO),
-            (body.peremeshchenie_entity, CashOpType.PEREMESHCHENIE),
-        ]:
+        for entity, op_type in entity_pairs:
             stats = await _sync_one_doc_type(
                 client, session, fop_id, entity, op_type,
                 period_from=body.period_from,
@@ -291,11 +317,17 @@ async def _sync_one_doc_type(
                 errors += 1
                 continue
 
-            # Каса — для приходу/розходу читаємо з реквізиту, для переміщення є з/в.
+            # Каса/банк-рахунок — різні реквізити у різних документах:
+            # - готівка: Касса_Key (ПоступлениеВКассу, РасходИзКассы)
+            # - безготівка: БанковскийСчет_Key (ПоступлениеНаСчет, РасходСоСчета)
+            # - переміщення: КассаОтправитель_Key + КассаПолучатель_Key
+            # - старий збірний реквізит: БанковскийСчетКасса_Key
             cash_ref = (
-                doc.get("БанковскийСчетКасса_Key")
-                or doc.get("Касса_Key")
+                doc.get("Касса_Key")
+                or doc.get("БанковскийСчет_Key")
+                or doc.get("БанковскийСчетКасса_Key")
                 or doc.get("КассаОтправитель_Key")
+                or doc.get("СчетОтправитель_Key")
             )
             cash_account_id = cash_by_ref.get(cash_ref) if cash_ref else None
             if not cash_account_id:
