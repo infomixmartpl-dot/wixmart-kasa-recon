@@ -115,14 +115,26 @@ class _TabContent extends ConsumerWidget {
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (e, _) => Center(child: Text('$e')),
       data: (rows) {
+        // Збираємо expected_cash_account_ids — це каси куди мапляться банк-рахунки.
+        // Переміщення які стосуються цих кас — релевантні для звірки (з/у банк).
+        // Переміщення між іншими (готівка ↔ готівка) — внутрішні, ховаємо.
+        final bankExpected = ref.watch(bankAccountsProvider).maybeWhen(
+          data: (banks) => banks
+              .where((b) => b.expectedCashAccountId != null)
+              .map((b) => b.expectedCashAccountId!)
+              .toSet(),
+          orElse: () => <String>{},
+        );
+
         final filtered = rows.where((r) {
           if (!subset.contains(r.kind)) return false;
-          // У вкладці «Питання» ховаємо cash_only-Перемещение — це внутрішні
-          // переміщення між касами, до банку не йдуть, у звірці тільки шум.
           if (r.kind == 'cash_only') {
             final opType = (r.cashOp ?? {})['op_type']?.toString() ?? '';
-            if (opType.toLowerCase().contains('перемещ') ||
-                opType.toLowerCase().contains('переміщ')) {
+            final cashAcc = (r.cashOp ?? {})['cash_account_id']?.toString() ?? '';
+            final isTransfer = opType.toLowerCase().contains('перемещ') ||
+                opType.toLowerCase().contains('переміщ');
+            // Приховуємо переміщення ТІЛЬКИ якщо НЕ стосується банк-каси.
+            if (isTransfer && !bankExpected.contains(cashAcc)) {
               return false;
             }
           }

@@ -572,3 +572,73 @@ async def manual_match(
     session.add(new_row)
     await session.commit()
     return {"id": new_row.id, "kind": "fuzzy", "manual": True}
+
+
+@router.get("/{session_id}/explain-bank/{bank_op_id}")
+async def explain_bank_only(
+    session_id: str,
+    bank_op_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Діагностика: чому конкретна банк-операція не знайшла пари у касі.
+
+    Повертає список cash-операцій з близькою сумою (±5% або ±10 грн) за
+    розширений період ±30 днів — щоб юзер міг побачити можливих кандидатів
+    які алгоритм відкинув.
+    """
+    s = await session.get(ReconSession, session_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="Сесію не знайдено")
+    b = await session.get(BankOp, bank_op_id)
+    if not b:
+        raise HTTPException(status_code=404, detail="Bank-операцію не знайдено")
+
+    # Шукаємо cash з близькою сумою у БД (без обмеження періодом сесії).
+    amount_min = float(b.amount) * 0.95
+    amount_max = float(b.amount) * 1.05
+    wide = timedelta(days=30)
+    r = await session.execute(
+        select(CashOp).where(
+            CashOp.fop_id == s.fop_id,
+            CashOp.amount >= amount_min,
+            CashOp.amount <= amount_max,
+            CashOp.op_date >= s.period_from - wide,
+            CashOp.op_date <= s.period_to + wide,
+        ).order_by(CashOp.op_date)
+    )
+    candidates = []
+    # Резолвимо ім'я каси.
+    cash_r = await session.execute(select(CashAccount.id, CashAccount.name_1c))
+    names = {cid: nm for cid, nm in cash_r.all()}
+    # Які cash_op_id вже зматчені у цій сесії?
+    matched_r = await session.execute(
+        select(MatchRow.cash_op_id).where(
+            MatchRow.session_id == session_id,
+            MatchRow.cash_op_id.is_not(None),
+        )
+    )
+    matched_cash = {row[0] for row in matched_r.all()}
+
+    for c in r.scalars():
+        candidates.append({
+            "id": c.id,
+            "op_date": c.op_date.isoformat(),
+            "amount": str(c.amount),
+            "op_type": c.op_type.value if hasattr(c.op_type, "value") else str(c.op_type),
+            "doc_number": c.doc_number,
+            "counterparty": c.counterparty,
+            "cash_account": names.get(c.cash_account_id, c.cash_account_id),
+            "matched_in_session": c.id in matched_cash,
+            "date_diff_days": (c.op_date - b.op_date).days,
+        })
+    return {
+        "bank_op": {
+            "op_date": b.op_date.isoformat(),
+            "amount": str(b.amount),
+            "direction": b.direction.value if hasattr(b.direction, "value") else str(b.direction),
+            "counterparty": b.counterparty,
+            "purpose": b.purpose,
+        },
+        "candidates_count": len(candidates),
+        "candidates": candidates,
+    }
