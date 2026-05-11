@@ -30,7 +30,7 @@ for /f "tokens=5" %%a in ('netstat -aon ^| findstr :8765 ^| findstr LISTENING') 
 
 echo.
 echo === Starting fresh backend in new window ===
-start "Kasa Recon Backend" /D "%~dp0..\backend" .venv\Scripts\python.exe -m recon_backend.launcher
+start "Kasa Recon Backend" /D "%~dp0..\backend" "%~dp0..\backend\.venv\Scripts\python.exe" -m recon_backend.launcher
 
 echo.
 echo [OK] Done. Backend running in background. UI (kasa_recon.exe) will pick up new data.
