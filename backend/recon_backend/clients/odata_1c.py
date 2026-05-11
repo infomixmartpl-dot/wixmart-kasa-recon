@@ -105,21 +105,35 @@ class OData1CClient:
         r = await self._get(url)
         return r.text
 
-    async def list_entity_sets(self) -> list[str]:
-        """Розпарсити $metadata і повернути назви всіх EntitySet (довідники + документи).
+    @staticmethod
+    def _local_name(tag: str) -> str:
+        """Прибрати XML namespace із тега: '{http://...}EntitySet' → 'EntitySet'."""
+        return tag.rsplit("}", 1)[-1] if "}" in tag else tag
 
-        Корисно щоб юзер знав які саме `Document_*` і `Catalog_*` доступні у його УНФ.
+    def _extract_entity_sets(self, xml: str) -> tuple[str, list[str]]:
+        """Розпарсити $metadata, повернути (version, [EntitySet names]).
+
+        Шукає теги з local-name = 'EntitySet' під будь-яким namespace —
+        бо різні версії 1С повертають метадані з різними префіксами
+        (`edm`, `edmx`, default xmlns=...).
         """
-        xml = await self.fetch_metadata()
         try:
             root = ET.fromstring(xml)
         except ET.ParseError as e:
             raise OData1CError(f"Не вдалось розпарсити $metadata: {e}") from e
+        version = root.attrib.get("Version", "?")
         sets: list[str] = []
-        for es in root.iter(f"{_EDM_NS}EntitySet"):
-            name = es.attrib.get("Name")
-            if name:
-                sets.append(name)
+        for elem in root.iter():
+            if self._local_name(elem.tag) == "EntitySet":
+                name = elem.attrib.get("Name")
+                if name:
+                    sets.append(name)
+        return version, sets
+
+    async def list_entity_sets(self) -> list[str]:
+        """Розпарсити $metadata і повернути назви всіх EntitySet (довідники + документи)."""
+        xml = await self.fetch_metadata()
+        _, sets = self._extract_entity_sets(xml)
         return sorted(sets)
 
     async def ping(self) -> dict[str, Any]:
@@ -127,22 +141,16 @@ class OData1CClient:
 
         Повертає словник з полями:
             ok: True/False
-            version: версія OData (наприклад "4.0")
+            version: версія edmx (наприклад "1.0" для 1С / "4.0" для нових)
             entity_count: скільки EntitySet знайдено
-            catalogs_sample: 5 перших Catalog_*
-            documents_sample: 5 перших Document_*
+            catalog_count / document_count: кількість Catalog_* і Document_*
+            catalogs_sample / documents_sample: перші 10 з кожного типу
         """
         try:
             xml = await self.fetch_metadata()
         except OData1CError as e:
             return {"ok": False, "error": str(e)}
-        root = ET.fromstring(xml)
-        version = root.attrib.get("Version", "?")
-        sets: list[str] = []
-        for es in root.iter(f"{_EDM_NS}EntitySet"):
-            n = es.attrib.get("Name")
-            if n:
-                sets.append(n)
+        version, sets = self._extract_entity_sets(xml)
         catalogs = sorted([s for s in sets if s.startswith("Catalog_")])
         documents = sorted([s for s in sets if s.startswith("Document_")])
         return {
