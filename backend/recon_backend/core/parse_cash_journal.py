@@ -101,10 +101,18 @@ def _classify_op_type(amount: Decimal, operation: str, comment: str = "") -> str
 def load_cash_journal(path: Path) -> CashJournalResult:
     """Прочитати xlsx журнал документів каси.
 
-    Тільки рядки з валідною датою + сумою + Касса/Счет потрапляють у результат.
+    Auto-detect формату:
+    - «Список transaction»: Дата + Касса/Счет + Сумма + Операция.
+    - «Перемещения денег»: Дата + Откуда + Куда + Сумма.
+    - «Движение денег» (звіт-tree): Банковский счет, касса + Поступление + Расход.
     """
     df = pd.read_excel(path, dtype=object)
     df.columns = [str(c).strip() for c in df.columns]
+
+    # Auto-detect tree-формату звіту «Движение денег».
+    cols_lower = {str(c).lower() for c in df.columns}
+    if any("оступл" in c for c in cols_lower) and any("асход" in c for c in cols_lower):
+        return _load_dvizhenie_report_tree(df)
 
     # Знайти потрібні колонки за нормалізованим іменем.
     # ВАЖЛИВО: кандидати ідуть від більш специфічних → до менш специфічних.
@@ -197,6 +205,119 @@ def load_cash_journal(path: Path) -> CashJournalResult:
 
     logger.info(
         "Журнал транзакцій: %d рядків валідні, %d без дати, %d без суми, %d без каси",
+        len(rows), skipped_no_date, skipped_no_amount, skipped_no_cash,
+    )
+    return CashJournalResult(
+        rows=rows,
+        skipped_no_date=skipped_no_date,
+        skipped_no_amount=skipped_no_amount,
+        skipped_no_cash=skipped_no_cash,
+    )
+
+
+def _load_dvizhenie_report_tree(df: pd.DataFrame) -> CashJournalResult:
+    """Парсер звіту «Движение денег» (tree-формат).
+
+    Структура:
+        Банковский счет, касса / Документ движения | Поступление | Расход | Чистый
+        Касса Аня ФОП                              | 92439.73    | 121690  | (header)
+          Поступление в кассу 4345 от 19.09.2022   | 1476        |         | ...
+          Расход из кассы 1918 от 21.09.2022       |             | 1500    | ...
+          Перемещение денег 894 от 19.09.2022      |             | 12000   | ...
+
+    Логіка:
+    - Якщо рядок не починається з 'Поступление/Расход/Перемещение' → header каси.
+    - Якщо документ — витягуємо тип, номер, дату; сума з колонки Поступление|Расход.
+    - Перемещение з Расход → ВКО (з точки зору каси-відправника).
+    - Перемещение з Поступление → ПКО (з точки зору каси-одержувача).
+      Це коректно для матчингу: bank OUT шукає ВКО, bank IN — ПКО.
+    """
+    import re as _re
+
+    # Знайти колонки.
+    first_col = list(df.columns)[0]  # «Банковский счет, касса» / «Документ движения»
+    postup_col = next((c for c in df.columns if "оступл" in str(c).lower()), None)
+    rashod_col = next((c for c in df.columns if "асход" in str(c).lower()), None)
+
+    if not postup_col or not rashod_col:
+        raise RuntimeError(
+            f"У звіті 'Движение денег' нема колонок Поступление/Расход. "
+            f"Знайдені: {list(df.columns)}"
+        )
+
+    doc_re = _re.compile(
+        r"^(.+?)\s+(\d+)\s+(?:от|вiд|від)\s+(\d{1,2}[.\-/]\d{1,2}[.\-/]\d{4})",
+        _re.IGNORECASE,
+    )
+
+    rows: list[CashJournalRow] = []
+    skipped_no_date = 0
+    skipped_no_amount = 0
+    skipped_no_cash = 0
+    current_kasa = ""
+
+    for _, raw in df.iterrows():
+        first_val_raw = raw[first_col]
+        if pd.isna(first_val_raw):
+            continue
+        first_val = str(first_val_raw).strip()
+        if not first_val or first_val.lower() in {"документ движения", "документ руху", "nan"}:
+            continue
+
+        low = first_val.lower()
+        is_doc = any(k in low for k in [
+            "поступление", "поступлення", "расход", "видаток",
+            "списание", "списання", "перемещение", "переміщення",
+        ])
+        if not is_doc:
+            # Це заголовок каси.
+            current_kasa = first_val
+            continue
+
+        m = doc_re.match(first_val)
+        if not m:
+            continue
+        type_text, doc_number, date_str = m.groups()
+        op_date = _parse_date(date_str)
+        if op_date is None:
+            skipped_no_date += 1
+            continue
+        if not current_kasa:
+            skipped_no_cash += 1
+            continue
+
+        amount_in = _parse_amount(raw[postup_col])
+        amount_out = _parse_amount(raw[rashod_col])
+
+        if amount_in is not None and amount_in > 0:
+            op_type = "ПКО"
+            amount = amount_in
+        elif amount_out is not None and amount_out > 0:
+            op_type = "ВКО"
+            amount = amount_out
+        else:
+            skipped_no_amount += 1
+            continue
+
+        # Якщо це переміщення — у comment зберігаємо повний рядок щоб юзер
+        # бачив що це не звичайне ПКО/ВКО.
+        is_transfer = "перемещ" in low or "переміщ" in low
+        comment = first_val if is_transfer else ""
+
+        rows.append(CashJournalRow(
+            op_date=op_date,
+            doc_number=doc_number,
+            amount=amount,
+            op_type=op_type,
+            cash_account_name=current_kasa,
+            counterparty="",
+            operation=type_text.strip(),
+            comment=comment,
+            structural_unit="",
+        ))
+
+    logger.info(
+        "Звіт 'Движение денег': %d рядків, %d без дати, %d без суми, %d без каси",
         len(rows), skipped_no_date, skipped_no_amount, skipped_no_cash,
     )
     return CashJournalResult(
