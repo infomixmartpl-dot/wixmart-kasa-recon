@@ -84,7 +84,12 @@ def _direction_to_op_types(direction: str) -> tuple[str, ...]:
     return ("ВКО", "Перемещение")
 
 
-def _amount_close(a: Decimal, b: Decimal, tolerance: Decimal = Decimal("0.01")) -> bool:
+def _amount_close(a: Decimal, b: Decimal, tolerance: Decimal = Decimal("1.00")) -> bool:
+    """Сума «близька» у межах толерансу.
+
+    За замовч. 1 грн — бо в обліку бувало округляли копійки. Для exact-кроку
+    окремо викликається з tolerance=0.01.
+    """
     return abs(a - b) <= tolerance
 
 
@@ -113,7 +118,7 @@ def reconcile_global(
     bank_to_cash_mapping: dict[str, str | None] | None = None,
     *,
     date_window_days: int = 14,
-    name_threshold: float = 85.0,
+    name_threshold: float = 70.0,
     blind_date_window_days: int = 7,
 ) -> list[MatchOutcome]:
     """Глобальна звірка ФОПа.
@@ -165,7 +170,8 @@ def reconcile_global(
                 out.extend(ops)
         return out
 
-    # ─── Крок 1: точні матчі (дата+сума) у правильній касі (за мапінгом) ───
+    # ─── Крок 1: точні матчі (дата+сума копійка в копійку) у правильній касі ───
+    strict_tolerance = Decimal("0.01")
     for bop in bank_ops:
         if bop.id in bank_matched:
             continue
@@ -179,7 +185,7 @@ def reconcile_global(
                     continue
                 if cop.op_date != bop.op_date:
                     continue
-                if not _amount_close(cop.amount, bop.amount):
+                if not _amount_close(cop.amount, bop.amount, tolerance=strict_tolerance):
                     continue
                 # Точний збіг у правильній касі.
                 bank_matched.add(bop.id)
@@ -197,7 +203,7 @@ def reconcile_global(
             if bop.id in bank_matched:
                 break
 
-    # ─── Крок 2: точні матчі (дата+сума) у будь-якій касі = peresort ───
+    # ─── Крок 2: точні матчі (дата+сума копійка в копійку) у будь-якій касі = peresort ───
     for bop in bank_ops:
         if bop.id in bank_matched:
             continue
@@ -207,7 +213,7 @@ def reconcile_global(
                 continue
             if cop.op_date != bop.op_date:
                 continue
-            if not _amount_close(cop.amount, bop.amount):
+            if not _amount_close(cop.amount, bop.amount, tolerance=strict_tolerance):
                 continue
             bank_matched.add(bop.id)
             cash_matched.add(cop.id)
@@ -247,12 +253,31 @@ def reconcile_global(
             if dd > date_window_days:
                 continue
 
-            cash_has_name = bool(cop.counterparty) or bool(cop.dok_osnova)
+            # Розширений fuzzy: шукаємо схожість прізвища/контрагента у БУДЬ-ЯКОМУ
+            # з полів обох сторін. У призначенні платежу банку часто пишуть
+            # прізвище клієнта; в касі прізвище може бути в counterparty,
+            # dok_osnova або comment.
+            cash_name_pool = " ".join(filter(None, [
+                cop.counterparty, cop.dok_osnova, cop.comment,
+            ]))
+            bank_name_pool = " ".join(filter(None, [
+                bop.counterparty, bop.purpose,
+            ]))
+            cash_has_name = bool(cash_name_pool.strip())
+
             if cash_has_name:
-                # Стандартний fuzzy: схожість імені / призначення з порогом.
-                sim_name = _name_sim(bop.counterparty, cop.counterparty)
-                sim_purpose = _purpose_sim(bop.purpose, f"{cop.comment} {cop.dok_osnova}")
-                sim_row = max(sim_name, sim_purpose)
+                # Беремо МАКСИМАЛЬНУ схожість серед усіх крос-перевірок:
+                #   bank.counterparty ↔ cash.counterparty
+                #   bank.counterparty ↔ cash.(dok_osnova/comment)
+                #   bank.purpose       ↔ cash.counterparty
+                #   bank.purpose       ↔ cash.(dok_osnova/comment)
+                sim_c2c = _name_sim(bop.counterparty, cop.counterparty)
+                sim_c2d = _purpose_sim(bop.counterparty, f"{cop.dok_osnova} {cop.comment}")
+                sim_p2c = _purpose_sim(bop.purpose, cop.counterparty)
+                sim_p2d = _purpose_sim(bop.purpose, f"{cop.dok_osnova} {cop.comment}")
+                # Загальний крос-pool теж — щоб точно нічого не упустити.
+                sim_pool = _name_sim(bank_name_pool, cash_name_pool)
+                sim_row = max(sim_c2c, sim_c2d, sim_p2c, sim_p2d, sim_pool)
                 if sim_row < name_threshold:
                     continue
                 row_score = sim_row - dd * 1.5

@@ -96,7 +96,7 @@ class ReconRunRequest(BaseModel):
     period_from: date
     period_to: date
     date_window_days: int = 14
-    fuzzy_name_threshold: int = 85
+    fuzzy_name_threshold: int = 70
 
 
 class ReconSessionOut(BaseModel):
