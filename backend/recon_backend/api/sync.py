@@ -233,8 +233,12 @@ async def upload_cash_journal(
     added = 0
     duplicates = 0
     unmapped: dict[str, int] = {}  # назви кас яких нема у БД → кількість рядків
+    added_by_type: dict[str, int] = {"ПКО": 0, "ВКО": 0, "Перемещение": 0}
+    duplicates_by_type: dict[str, int] = {"ПКО": 0, "ВКО": 0, "Перемещение": 0}
+    parsed_by_type: dict[str, int] = {"ПКО": 0, "ВКО": 0, "Перемещение": 0}
 
     for row in parsed.rows:
+        parsed_by_type[row.op_type] = parsed_by_type.get(row.op_type, 0) + 1
         key = row.cash_account_name.strip().lower()
         cash_account_id = cash_by_name.get(key)
         if not cash_account_id:
@@ -257,6 +261,7 @@ async def upload_cash_journal(
         )
         if existing.scalar_one_or_none():
             duplicates += 1
+            duplicates_by_type[row.op_type] = duplicates_by_type.get(row.op_type, 0) + 1
             continue
 
         # Зберігаємо: операція → stattia (тип як «Поставщику» / «От покупателя»),
@@ -277,14 +282,48 @@ async def upload_cash_journal(
             source="journal_xlsx",
         ))
         added += 1
+        added_by_type[row.op_type] = added_by_type.get(row.op_type, 0) + 1
 
     await session.commit()
     return {
         "added": added,
+        "added_by_type": added_by_type,
+        "duplicates_by_type": duplicates_by_type,
+        "parsed_by_type": parsed_by_type,
         "duplicates": duplicates,
         "total_parsed": len(parsed.rows),
         "skipped_no_date": parsed.skipped_no_date,
         "skipped_no_amount": parsed.skipped_no_amount,
         "skipped_no_cash": parsed.skipped_no_cash,
         "unmapped_cash_accounts": unmapped,  # назви які не знайдено у БД
+    }
+
+
+@router.post("/reset-fop-data")
+async def reset_fop_data(fop_id: str, session: AsyncSession = Depends(get_session)):
+    """Видалити ВСІ дані ФОПа: bank_ops, cash_ops, recon-сесії та їхні рядки.
+    Збереже: bank_accounts, cash_accounts, pidrozdily, ФОПа.
+
+    Корисно щоб зробити чистий start після кількох спроб заливки.
+    """
+    from sqlalchemy import delete as sql_delete
+    from ..db.models import MatchRow, ReconSession
+
+    # Знайти сесії і видалити їхні рядки.
+    s_result = await session.execute(
+        select(ReconSession.id).where(ReconSession.fop_id == fop_id)
+    )
+    session_ids = [row[0] for row in s_result.all()]
+    if session_ids:
+        await session.execute(sql_delete(MatchRow).where(MatchRow.session_id.in_(session_ids)))
+        await session.execute(sql_delete(ReconSession).where(ReconSession.id.in_(session_ids)))
+
+    bank_r = await session.execute(sql_delete(BankOp).where(BankOp.fop_id == fop_id))
+    cash_r = await session.execute(sql_delete(CashOp).where(CashOp.fop_id == fop_id))
+
+    await session.commit()
+    return {
+        "deleted_sessions": len(session_ids),
+        "deleted_bank_ops": bank_r.rowcount,
+        "deleted_cash_ops": cash_r.rowcount,
     }
