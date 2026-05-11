@@ -7,10 +7,10 @@ import '../api/api_client.dart';
 import '../api/repositories.dart';
 import '../models/models.dart';
 
-/// Центральний HTTP-клієнт. baseUrl задаємо через `setBaseUrl`.
+/// Центральний HTTP-клієнт. baseUrl задаємо через `setBaseUrl` після старту бекенду.
 final apiClientProvider = Provider<ApiClient>((ref) {
-  // У production буде ne4et.net (або інший продакшен), у dev — localhost.
-  return ApiClient(baseUrl: 'http://localhost:8000');
+  // Embedded: бекенд слухає на 127.0.0.1:8765, запускається BackendSupervisor-ом.
+  return ApiClient(baseUrl: 'http://127.0.0.1:8765');
 });
 
 final fopRepoProvider = Provider((ref) => FopRepository(ref.read(apiClientProvider)));

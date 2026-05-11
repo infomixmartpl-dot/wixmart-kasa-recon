@@ -6,10 +6,10 @@ on:
     tags: ['v*']
   pull_request:
     branches: [main]
-  workflow_dispatch:  # ручний запуск з GitHub UI
+  workflow_dispatch:
 
 jobs:
-  build-windows:
+  build:
     runs-on: windows-latest
     defaults:
       run:
@@ -19,6 +19,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ───── 1. Backend → recon_backend.exe (PyInstaller) ─────
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install backend + PyInstaller
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[build]
+
+      - name: Build backend with PyInstaller
+        working-directory: backend
+        run: pyinstaller recon_backend.spec --clean --noconfirm
+
+      # ───── 2. Frontend → kasa_recon.exe (Flutter) ─────
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -28,26 +46,38 @@ jobs:
       - name: Enable Windows desktop
         run: flutter config --enable-windows-desktop
 
-      - name: Get dependencies
+      - name: Get Flutter dependencies
         working-directory: frontend
         run: flutter pub get
 
-      - name: Analyze (no errors only)
+      - name: Analyze (errors only)
         working-directory: frontend
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
-      - name: Build Windows release
+      - name: Build Flutter Windows release
         working-directory: frontend
         run: flutter build windows --release
 
-      - name: Pack release artifact
+      # ───── 3. Об'єднати: backend всередину frontend bundle ─────
+      - name: Bundle backend into frontend folder
+        run: |
+          # Flutter Windows зібрав файли у frontend/build/windows/x64/runner/Release/
+          # PyInstaller зібрав backend у backend/dist/recon_backend/
+          # Кладемо backend поряд з kasa_recon.exe → frontend знайде його через resolveBackendCommand()
+          FRONTEND_OUT="frontend/build/windows/x64/runner/Release"
+          BACKEND_OUT="backend/dist/recon_backend"
+          cp -r "$BACKEND_OUT" "$FRONTEND_OUT/recon_backend"
+          ls -la "$FRONTEND_OUT"
+          ls "$FRONTEND_OUT/recon_backend" | head -5
+
+      # ───── 4. Запакувати у zip ─────
+      - name: Pack release zip
         working-directory: frontend/build/windows/x64/runner/Release
         run: |
-          # Тег = ім'я артефакту, інакше дата + sha
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            NAME="kasa_recon-${GITHUB_REF#refs/tags/}"
+            NAME="kasa_recon-${GITHUB_REF#refs/tags/}-windows"
           else
-            NAME="kasa_recon-$(date +%Y%m%d)-${GITHUB_SHA::7}"
+            NAME="kasa_recon-$(date +%Y%m%d)-${GITHUB_SHA::7}-windows"
           fi
           echo "ARTIFACT_NAME=$NAME" >> $GITHUB_ENV
           7z a "../../../../../$NAME.zip" *

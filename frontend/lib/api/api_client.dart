@@ -9,7 +9,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
 class ApiClient {
-  ApiClient({String baseUrl = 'http://localhost:8000'})
+  ApiClient({String baseUrl = 'http://127.0.0.1:8765'})
       : _dio = Dio(
           BaseOptions(
             baseUrl: baseUrl,
