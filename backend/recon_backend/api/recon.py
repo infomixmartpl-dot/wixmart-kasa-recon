@@ -314,6 +314,67 @@ async def delete_session(session_id: str, session: AsyncSession = Depends(get_se
     return None
 
 
+@router.get("/{session_id}/breakdown")
+async def session_breakdown(session_id: str, session: AsyncSession = Depends(get_session)):
+    """Діагностика: скільки яких op_type у БД за період сесії + по касах.
+
+    Допомагає зрозуміти: «чому жоден ПКО не зматчився» — може у БД ПКО
+    взагалі немає? Або вони на «не тій» касі?
+    """
+    s = await session.get(ReconSession, session_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="Сесію не знайдено")
+
+    # Каса-операції за період — по op_type.
+    r = await session.execute(
+        select(CashOp.op_type, func.count(CashOp.id))
+        .where(
+            CashOp.fop_id == s.fop_id,
+            CashOp.op_date >= s.period_from,
+            CashOp.op_date <= s.period_to,
+        )
+        .group_by(CashOp.op_type)
+    )
+    by_type: dict[str, int] = {}
+    for op_type, cnt in r.all():
+        key = op_type.value if hasattr(op_type, "value") else str(op_type)
+        by_type[key] = cnt
+
+    # По касах (top 10).
+    r2 = await session.execute(
+        select(CashOp.cash_account_id, CashOp.op_type, func.count(CashOp.id))
+        .where(
+            CashOp.fop_id == s.fop_id,
+            CashOp.op_date >= s.period_from,
+            CashOp.op_date <= s.period_to,
+        )
+        .group_by(CashOp.cash_account_id, CashOp.op_type)
+    )
+    by_cash: dict[str, dict[str, int]] = {}
+    for cash_id, op_type, cnt in r2.all():
+        key = op_type.value if hasattr(op_type, "value") else str(op_type)
+        by_cash.setdefault(cash_id, {})[key] = cnt
+
+    # Резолвимо ім'я каси.
+    if by_cash:
+        cash_r = await session.execute(
+            select(CashAccount.id, CashAccount.name_1c)
+            .where(CashAccount.id.in_(list(by_cash.keys())))
+        )
+        names = {cid: nm for cid, nm in cash_r.all()}
+    else:
+        names = {}
+
+    return {
+        "period": f"{s.period_from} .. {s.period_to}",
+        "cash_ops_by_type": by_type,
+        "cash_ops_by_account": [
+            {"cash_account": names.get(cid, cid), "breakdown": br}
+            for cid, br in by_cash.items()
+        ],
+    }
+
+
 @router.post("/{session_id}/rerun", response_model=ReconSessionOut)
 async def rerun_session(session_id: str, session: AsyncSession = Depends(get_session)):
     """Перерахувати сесію тими ж параметрами (period, dateWindow, threshold).
