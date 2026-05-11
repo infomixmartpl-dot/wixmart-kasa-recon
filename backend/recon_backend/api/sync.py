@@ -259,6 +259,11 @@ async def upload_cash_journal(
             duplicates += 1
             continue
 
+        # Зберігаємо: операція → stattia (тип як «Поставщику» / «От покупателя»),
+        # структурна одиниця → comment з префіксом, щоб не плутати з 1С-коментарем.
+        comment_parts = []
+        if row.structural_unit:
+            comment_parts.append(f"Підрозділ: {row.structural_unit}")
         session.add(CashOp(
             fop_id=fop_id,
             cash_account_id=cash_account_id,
@@ -268,7 +273,7 @@ async def upload_cash_journal(
             doc_number=doc_num,
             counterparty=row.counterparty or None,
             stattia=row.operation or None,
-            comment=row.structural_unit or None,
+            comment="; ".join(comment_parts) if comment_parts else None,
             source="journal_xlsx",
         ))
         added += 1

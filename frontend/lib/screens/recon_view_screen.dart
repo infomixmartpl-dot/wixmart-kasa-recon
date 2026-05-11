@@ -180,7 +180,10 @@ class _TabContent extends ConsumerWidget {
           DataCell(Text(fmtAmt(c['amount']))),
           DataCell(Text('№${c['doc_number'] ?? ''}')),
           DataCell(Text(c['cash_account_id']?.toString().substring(0, 6) ?? '')),
-          DataCell(Text(r.notes ?? '', overflow: TextOverflow.ellipsis)),
+          DataCell(Tooltip(
+          message: r.notes ?? '',
+          child: Text(r.notes ?? '', overflow: TextOverflow.ellipsis),
+        )),
         ],
       );
     }
@@ -194,7 +197,10 @@ class _TabContent extends ConsumerWidget {
           DataCell(Text(fmtAmt(b['amount']))),
           DataCell(Text(b['counterparty']?.toString() ?? '', overflow: TextOverflow.ellipsis)),
           DataCell(Text(b['purpose']?.toString() ?? '', overflow: TextOverflow.ellipsis)),
-          DataCell(Text(r.notes ?? '', overflow: TextOverflow.ellipsis)),
+          DataCell(Tooltip(
+          message: r.notes ?? '',
+          child: Text(r.notes ?? '', overflow: TextOverflow.ellipsis),
+        )),
         ],
       );
     }
