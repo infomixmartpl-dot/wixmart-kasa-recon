@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -89,11 +90,15 @@ async def run_recon(payload: ReconRunRequest, session: AsyncSession = Depends(ge
         )
     )
     bank_ops_db = list(bank_q.scalars())
+    # Cash беремо ШИРШЕ — на ±dateWindow днів від періоду банку. Бо в 1С
+    # документ може бути проведений із затримкою (наприклад, банк 30.09,
+    # ПКО проведено 10.10) і алгоритм має знайти таку пару у fuzzy.
+    _w = timedelta(days=payload.date_window_days)
     cash_q = await session.execute(
         select(CashOp).where(
             CashOp.fop_id == payload.fop_id,
-            CashOp.op_date >= payload.period_from,
-            CashOp.op_date <= payload.period_to,
+            CashOp.op_date >= payload.period_from - _w,
+            CashOp.op_date <= payload.period_to + _w,
         )
     )
     cash_ops_db = list(cash_q.scalars())
@@ -390,7 +395,8 @@ async def rerun_session(session_id: str, session: AsyncSession = Depends(get_ses
     # Видаляємо старі рядки.
     await session.execute(delete(MatchRow).where(MatchRow.session_id == session_id))
 
-    # Витягуємо BankOp і CashOp за період.
+    # Bank в межах періоду, cash — ширше на ±dateWindow (затримка проводки в 1С).
+    _w = timedelta(days=s.date_window_days)
     bank_q = await session.execute(
         select(BankOp).where(
             BankOp.fop_id == s.fop_id,
@@ -402,8 +408,8 @@ async def rerun_session(session_id: str, session: AsyncSession = Depends(get_ses
     cash_q = await session.execute(
         select(CashOp).where(
             CashOp.fop_id == s.fop_id,
-            CashOp.op_date >= s.period_from,
-            CashOp.op_date <= s.period_to,
+            CashOp.op_date >= s.period_from - _w,
+            CashOp.op_date <= s.period_to + _w,
         )
     )
     cash_ops_db = list(cash_q.scalars())
