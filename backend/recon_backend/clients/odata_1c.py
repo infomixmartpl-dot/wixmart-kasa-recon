@@ -206,6 +206,7 @@ class OData1CClient:
         *,
         filter_: str | None = None,
         expand: list[str] | None = None,
+        order_by: str | None = None,
         page_size: int = 500,
         max_pages: int = 200,
     ) -> list[dict[str, Any]]:
@@ -216,6 +217,7 @@ class OData1CClient:
                 entity_set,
                 filter_=filter_,
                 expand=expand,
+                order_by=order_by,
                 top=page_size,
                 skip=page * page_size,
             )
@@ -263,14 +265,20 @@ class OData1CClient:
         to_str = self.odata_datetime(to_dt)
         filter_ = f"{date_field} ge {from_str} and {date_field} le {to_str}"
 
+        # Спершу пробуємо нормальний шлях: $filter + явний $orderby=Ref_Key.
+        # Явний orderby часто скасовує AUTOORDER, бо 1С не додає авто-сортування
+        # за полем-яке-конфліктує-з-фільтром.
         try:
-            return await self.fetch_all(entity_set, filter_=filter_, expand=expand)
+            return await self.fetch_all(
+                entity_set, filter_=filter_, expand=expand, order_by="Ref_Key",
+            )
         except OData1CError as e:
             msg = str(e)
             # AUTOORDER або інша помилка ГДЕ → fallback на повне завантаження.
             if "AUTOORDER" in msg or "предложении" in msg or "ГДЕ" in msg:
                 logger.warning(
-                    "OData %s: $filter по %s заборонено (%s). Fallback: full fetch + local filter.",
+                    "OData %s: $filter по %s заборонено навіть з orderby (%s). "
+                    "Fallback: full fetch + local filter.",
                     entity_set, date_field, msg[:120],
                 )
                 all_docs = await self.fetch_all(entity_set, expand=expand)
