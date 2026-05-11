@@ -1,25 +1,24 @@
 @echo off
-REM start-backend.bat — запустити бекенд у dev-режимі.
-REM Юзер просто двічі клацає на цей файл — відкривається консоль з логами бекенду.
+REM start-backend.bat - run backend in dev mode.
+REM Plain ASCII to avoid Windows CP866/CP1251 encoding issues on .bat files.
 
 setlocal
 cd /d "%~dp0\..\backend"
 
 if not exist .venv\Scripts\python.exe (
-    echo Venv не знайдено! Запусти спочатку scripts\setup-windows.ps1
+    echo [FAIL] Venv not found. Run scripts\setup-windows.ps1 first.
     pause
     exit /b 1
 )
 
 echo === Kasa Recon backend ===
-echo Слухає на http://127.0.0.1:8765
-echo Логи: %%LOCALAPPDATA%%\KasaRecon\backend.log
-echo База: %%LOCALAPPDATA%%\KasaRecon\recon.db
+echo Listens on http://127.0.0.1:8765
+echo Logs: %%LOCALAPPDATA%%\KasaRecon\backend.log
+echo DB:   %%LOCALAPPDATA%%\KasaRecon\recon.db
 echo.
-echo Натисни Ctrl+C щоб зупинити.
+echo Press Ctrl+C to stop.
 echo.
 
 .venv\Scripts\python.exe -m recon_backend.launcher
 
-REM Якщо процес закрився сам — нехай вікно залишиться щоб юзер прочитав помилку.
 pause
