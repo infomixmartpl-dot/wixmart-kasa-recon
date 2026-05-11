@@ -312,3 +312,20 @@ async def delete_session(session_id: str, session: AsyncSession = Depends(get_se
     await session.delete(s)
     await session.commit()
     return None
+
+
+@router.delete("/sessions/all", status_code=status.HTTP_200_OK)
+async def delete_all_sessions(fop_id: str, session: AsyncSession = Depends(get_session)):
+    """Видалити ВСІ сесії звірки для ФОПа — швидке очищення чорнеток."""
+    result = await session.execute(
+        select(ReconSession.id).where(ReconSession.fop_id == fop_id)
+    )
+    session_ids = [row[0] for row in result.all()]
+    if not session_ids:
+        return {"deleted": 0}
+
+    # Видаляємо рядки потім сесії — двома запитами.
+    await session.execute(delete(MatchRow).where(MatchRow.session_id.in_(session_ids)))
+    await session.execute(delete(ReconSession).where(ReconSession.id.in_(session_ids)))
+    await session.commit()
+    return {"deleted": len(session_ids)}
