@@ -169,19 +169,21 @@ class ODataRepository {
     required String fopId,
     required DateTime periodFrom,
     required DateTime periodTo,
-    String postuplenieEntity = 'Document_ПоступлениеВКассу',
-    String rashodEntity = 'Document_РасходИзКассы',
-    String peremeshchenieEntity = 'Document_ПеремещениеДенег',
+    List<String>? inDocuments,
+    List<String>? outDocuments,
+    List<String>? transferDocuments,
   }) async {
+    final data = <String, dynamic>{
+      'period_from': _isoDate(periodFrom),
+      'period_to': _isoDate(periodTo),
+    };
+    if (inDocuments != null) data['in_documents'] = inDocuments;
+    if (outDocuments != null) data['out_documents'] = outDocuments;
+    if (transferDocuments != null) data['transfer_documents'] = transferDocuments;
+
     final r = await _api.post<Map<String, dynamic>>(
       '/api/odata/$fopId/sync-cash',
-      data: {
-        'period_from': _isoDate(periodFrom),
-        'period_to': _isoDate(periodTo),
-        'postuplenie_entity': postuplenieEntity,
-        'rashod_entity': rashodEntity,
-        'peremeshchenie_entity': peremeshchenieEntity,
-      },
+      data: data,
     );
     return r.data ?? {};
   }
