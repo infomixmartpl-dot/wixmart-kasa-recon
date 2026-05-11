@@ -13,9 +13,17 @@ block_cipher = None
 
 a = Analysis(
     ['run_backend.py'],
-    pathex=['.'],
+    # pathex include repo root (../) — щоб PyInstaller знайшов legacy `recon/`
+    # пакет який sync.py імпортує через runtime sys.path hack.
+    pathex=['.', '..'],
     binaries=[],
-    datas=[],
+    # Включаємо вихідники legacy парсерів у bundle як data files
+    # (на випадок якщо PyInstaller не упакує їх як модулі через hiddenimports).
+    datas=[
+        ('../recon/__init__.py', 'recon'),
+        ('../recon/parse_1c.py', 'recon'),
+        ('../recon/parse_privat.py', 'recon'),
+    ],
     hiddenimports=[
         # SQLAlchemy + aiosqlite — PyInstaller часом губить async-діалект
         'aiosqlite',
@@ -40,6 +48,10 @@ a = Analysis(
         'uvicorn.protocols.http.h11_impl',
         'uvicorn.protocols.websockets.auto',
         'uvicorn.lifespan.on',
+        # Legacy CLI парсери — імпортуються через sys.path hack у sync.py
+        'recon',
+        'recon.parse_1c',
+        'recon.parse_privat',
     ],
     hookspath=[],
     hooksconfig={},
