@@ -241,19 +241,27 @@ async def sync_cash_from_odata(
     pidr_by_ref: dict[str, str] = {p.odata_ref: p.id for p in result.scalars() if p.odata_ref}
 
     summary: dict[str, dict[str, int]] = {}
-    expand = ["Контрагент", "Подразделение"]
 
-    # Готуємо пари (entity_name, op_type) — підтримуємо списки документів.
-    entity_pairs: list[tuple[str, CashOpType]] = []
+    # $expand залежить від типу документа:
+    # - прихід/розхід: є Контрагент. Подразделение в УНФ 1.6 безготівкових
+    #   документах часто немає — не запитуємо щоб уникнути 400.
+    # - переміщення: Контрагента немає (це переміщення між рахунками).
+    # Назви підрозділів і контрагентів все одно тягнемо як string-поле
+    # (`*_Description`), бо без expand 1С зазвичай повертає їх плоско.
+    expand_in_out = ["Контрагент"]
+    expand_transfer: list[str] = []
+
+    # Готуємо трійки (entity_name, op_type, expand) — підтримуємо списки документів.
+    entity_jobs: list[tuple[str, CashOpType, list[str]]] = []
     for entity in body.in_documents:
-        entity_pairs.append((entity, CashOpType.PKO))
+        entity_jobs.append((entity, CashOpType.PKO, expand_in_out))
     for entity in body.out_documents:
-        entity_pairs.append((entity, CashOpType.VKO))
+        entity_jobs.append((entity, CashOpType.VKO, expand_in_out))
     for entity in body.transfer_documents:
-        entity_pairs.append((entity, CashOpType.PEREMESHCHENIE))
+        entity_jobs.append((entity, CashOpType.PEREMESHCHENIE, expand_transfer))
 
     async with await _build_client(session, fop_id, None) as client:
-        for entity, op_type in entity_pairs:
+        for entity, op_type, expand in entity_jobs:
             stats = await _sync_one_doc_type(
                 client, session, fop_id, entity, op_type,
                 period_from=body.period_from,

@@ -252,12 +252,42 @@ class OData1CClient:
         Стандартне поле дати у 1С OData — `Date`. У деяких документах може
         бути `DateAndTime` або інше — передавай через `date_field`.
 
-        `expand` зазвичай `["Контрагент", "Подразделение", "БанковскийСчетКасса"]`.
+        Деякі конфігурації УНФ 1.6 відмовляються застосовувати `$filter` по
+        `Date` через AUTOORDER (внутрішня помилка 1С: «Операция не разрешена
+        в предложении ГДЕ»). У такому випадку робимо fallback: качаємо всі
+        документи з пагінацією і фільтруємо локально по даті.
         """
-        from_str = self.odata_datetime(period_from)
-        to_str = self.odata_datetime(datetime.combine(period_to, datetime.max.time()))
+        from_dt = datetime.combine(period_from, datetime.min.time())
+        to_dt = datetime.combine(period_to, datetime.max.time())
+        from_str = self.odata_datetime(from_dt)
+        to_str = self.odata_datetime(to_dt)
         filter_ = f"{date_field} ge {from_str} and {date_field} le {to_str}"
-        return await self.fetch_all(entity_set, filter_=filter_, expand=expand)
+
+        try:
+            return await self.fetch_all(entity_set, filter_=filter_, expand=expand)
+        except OData1CError as e:
+            msg = str(e)
+            # AUTOORDER або інша помилка ГДЕ → fallback на повне завантаження.
+            if "AUTOORDER" in msg or "предложении" in msg or "ГДЕ" in msg:
+                logger.warning(
+                    "OData %s: $filter по %s заборонено (%s). Fallback: full fetch + local filter.",
+                    entity_set, date_field, msg[:120],
+                )
+                all_docs = await self.fetch_all(entity_set, expand=expand)
+                # Локальний фільтр по полю Date (рядок ISO).
+                result = []
+                for d in all_docs:
+                    raw = d.get(date_field) or ""
+                    try:
+                        doc_dt = datetime.fromisoformat(raw[:19])
+                    except ValueError:
+                        continue
+                    if from_dt <= doc_dt <= to_dt:
+                        result.append(d)
+                logger.info("Локальний фільтр %s: %d з %d документів у періоді.",
+                            entity_set, len(result), len(all_docs))
+                return result
+            raise
 
 
 def safe_filter(value: str) -> str:
