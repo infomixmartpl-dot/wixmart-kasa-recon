@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from datetime import date
 from decimal import Decimal
 from typing import Any
@@ -18,6 +20,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
 
 from ..clients import OData1CClient, OData1CError
 from ..db.models import CashAccount, CashOp, CashOpType, Fop, Pidrozdil
@@ -242,31 +246,46 @@ async def sync_cash_from_odata(
 
     summary: dict[str, dict[str, int]] = {}
 
-    # $expand залежить від типу документа:
-    # - прихід/розхід: є Контрагент. Подразделение в УНФ 1.6 безготівкових
-    #   документах часто немає — не запитуємо щоб уникнути 400.
-    # - переміщення: Контрагента немає (це переміщення між рахунками).
-    # Назви підрозділів і контрагентів все одно тягнемо як string-поле
-    # (`*_Description`), бо без expand 1С зазвичай повертає їх плоско.
-    expand_in_out = ["Контрагент"]
-    expand_transfer: list[str] = []
+    # Без $expand — 1С повертає reference-поля як `Контрагент_Description`
+    # (плоско, без вкладеного об'єкту). Цього досить, бо повна структура
+    # контрагентів нам не потрібна. Без expand payload з 1С у 3-5 разів менший
+    # → значно швидше при повному fetch fallback.
 
-    # Готуємо трійки (entity_name, op_type, expand) — підтримуємо списки документів.
-    entity_jobs: list[tuple[str, CashOpType, list[str]]] = []
+    # Готуємо пари (entity_name, op_type) — підтримуємо списки документів.
+    entity_pairs: list[tuple[str, CashOpType]] = []
     for entity in body.in_documents:
-        entity_jobs.append((entity, CashOpType.PKO, expand_in_out))
+        entity_pairs.append((entity, CashOpType.PKO))
     for entity in body.out_documents:
-        entity_jobs.append((entity, CashOpType.VKO, expand_in_out))
+        entity_pairs.append((entity, CashOpType.VKO))
     for entity in body.transfer_documents:
-        entity_jobs.append((entity, CashOpType.PEREMESHCHENIE, expand_transfer))
+        entity_pairs.append((entity, CashOpType.PEREMESHCHENIE))
 
     async with await _build_client(session, fop_id, None) as client:
-        for entity, op_type, expand in entity_jobs:
-            stats = await _sync_one_doc_type(
-                client, session, fop_id, entity, op_type,
-                period_from=body.period_from,
-                period_to=body.period_to,
-                expand=expand,
+        # Фаза 1: ПАРАЛЕЛЬНО витягуємо документи з 1С (httpx підтримує).
+        # Це найповільніша частина — особливо при fallback на повний fetch.
+        async def _fetch_one(entity: str) -> tuple[str, list[dict] | OData1CError]:
+            try:
+                docs = await client.fetch_documents_period(
+                    entity, body.period_from, body.period_to, expand=None,
+                )
+                logger.info("OData fetch %s: %d документів", entity, len(docs))
+                return entity, docs
+            except OData1CError as e:
+                logger.warning("OData fetch %s провалився: %s", entity, e)
+                return entity, e
+
+        fetch_results = await asyncio.gather(*[_fetch_one(e) for e, _ in entity_pairs])
+        fetched: dict[str, list[dict] | OData1CError] = dict(fetch_results)
+
+        # Фаза 2: СЕРІАЛЬНО пишемо у БД (AsyncSession не thread-safe).
+        for entity, op_type in entity_pairs:
+            docs_or_err = fetched.get(entity)
+            if isinstance(docs_or_err, OData1CError):
+                summary[entity] = {"added": 0, "errors": 1, "error_message": str(docs_or_err)}
+                continue
+            docs = docs_or_err or []
+            stats = await _write_docs_to_db(
+                session, fop_id, entity, op_type, docs,
                 cash_by_ref=cash_by_ref,
                 pidr_by_ref=pidr_by_ref,
                 filter_cash_id=body.cash_account_id,
@@ -277,16 +296,13 @@ async def sync_cash_from_odata(
     return summary
 
 
-async def _sync_one_doc_type(
-    client: OData1CClient,
+async def _write_docs_to_db(
     session: AsyncSession,
     fop_id: str,
     entity: str,
     op_type: CashOpType,
+    docs: list[dict[str, Any]],
     *,
-    period_from: date,
-    period_to: date,
-    expand: list[str],
     cash_by_ref: dict[str, str],
     pidr_by_ref: dict[str, str],
     filter_cash_id: str | None,
@@ -295,11 +311,6 @@ async def _sync_one_doc_type(
     duplicates = 0
     skipped_no_cash = 0
     errors = 0
-
-    try:
-        docs = await client.fetch_documents_period(entity, period_from, period_to, expand=expand)
-    except OData1CError as e:
-        return {"added": 0, "errors": 1, "error_message": str(e)}
 
     for doc in docs:
         try:
