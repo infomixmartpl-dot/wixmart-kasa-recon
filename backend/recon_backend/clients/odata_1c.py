@@ -213,26 +213,45 @@ class OData1CClient:
         *,
         filter_: str | None = None,
         expand: list[str] | None = None,
+        select: list[str] | None = None,
         order_by: str | None = None,
-        page_size: int = 500,
+        page_size: int = 1000,
         max_pages: int = 200,
+        concurrent_pages: int = 4,
     ) -> list[dict[str, Any]]:
-        """Скачати ВСЕ з пагінацією. Зупиняється коли сторінка повертає менше ніж page_size."""
+        """Скачати ВСЕ з пагінацією. Стрім по `concurrent_pages` сторінок паралельно.
+
+        Зупиняється коли остання порція повертає менше ніж page_size.
+        """
+        import asyncio
         all_rows: list[dict[str, Any]] = []
-        for page in range(max_pages):
-            chunk = await self.query(
-                entity_set,
-                filter_=filter_,
-                expand=expand,
-                order_by=order_by,
-                top=page_size,
-                skip=page * page_size,
-            )
-            all_rows.extend(chunk)
-            logger.info("OData %s: сторінка %d, +%d, всього %d",
-                        entity_set, page + 1, len(chunk), len(all_rows))
-            if len(chunk) < page_size:
+        page = 0
+        while page < max_pages:
+            # Запитуємо одночасно concurrent_pages сторінок.
+            batch_coros = [
+                self.query(
+                    entity_set,
+                    filter_=filter_,
+                    expand=expand,
+                    select=select,
+                    order_by=order_by,
+                    top=page_size,
+                    skip=(page + i) * page_size,
+                )
+                for i in range(concurrent_pages)
+            ]
+            chunks = await asyncio.gather(*batch_coros)
+            for i, chunk in enumerate(chunks):
+                all_rows.extend(chunk)
+                logger.info("OData %s: сторінка %d, +%d, всього %d",
+                            entity_set, page + i + 1, len(chunk), len(all_rows))
+            # Якщо ОСТАННЯ порція менша за page_size — більше нема даних.
+            if chunks[-1] and len(chunks[-1]) < page_size:
                 break
+            # Якщо порожня порція в середині — теж кінець.
+            if not chunks[-1]:
+                break
+            page += concurrent_pages
         return all_rows
 
     # ─── Високорівневі helper-и під УНФ 1.6 ─────────────────────────
@@ -255,6 +274,7 @@ class OData1CClient:
         *,
         date_field: str = "Date",
         expand: list[str] | None = None,
+        select: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Витягти всі документи `entity_set` за період [from..to] включно.
 
@@ -277,7 +297,8 @@ class OData1CClient:
         # за полем-яке-конфліктує-з-фільтром.
         try:
             return await self.fetch_all(
-                entity_set, filter_=filter_, expand=expand, order_by="Ref_Key",
+                entity_set, filter_=filter_, expand=expand, select=select,
+                order_by="Ref_Key",
             )
         except OData1CError as e:
             msg = str(e)
@@ -288,7 +309,7 @@ class OData1CClient:
                     "Fallback: full fetch + local filter.",
                     entity_set, date_field, msg[:120],
                 )
-                all_docs = await self.fetch_all(entity_set, expand=expand)
+                all_docs = await self.fetch_all(entity_set, expand=expand, select=select)
                 # Локальний фільтр по полю Date (рядок ISO).
                 result = []
                 for d in all_docs:

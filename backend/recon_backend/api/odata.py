@@ -260,13 +260,37 @@ async def sync_cash_from_odata(
     for entity in body.transfer_documents:
         entity_pairs.append((entity, CashOpType.PEREMESHCHENIE))
 
+    # $select per тип документа — суттєво зменшує payload з 1С.
+    # Без $select 1С повертає всі ~50 полів кожного документа.
+    BASE_FIELDS = [
+        "Ref_Key", "Date", "Number",
+        "СуммаДокумента", "Сумма",
+        "Контрагент_Key", "Контрагент_Description",
+        "Подразделение_Key",
+        "СтатьяДвиженияДенежныхСредств_Description",
+        "Комментарий",
+    ]
+    SELECT_FIELDS = {
+        "Document_ПоступлениеВКассу": BASE_FIELDS + ["Касса_Key"],
+        "Document_РасходИзКассы":     BASE_FIELDS + ["Касса_Key"],
+        "Document_ПоступлениеНаСчет": BASE_FIELDS + ["БанковскийСчет_Key"],
+        "Document_РасходСоСчета":     BASE_FIELDS + ["БанковскийСчет_Key"],
+        "Document_ПеремещениеДС": [
+            "Ref_Key", "Date", "Number",
+            "СуммаДокумента", "Сумма",
+            "КассаОтправитель_Key", "КассаПолучатель_Key",
+            "СчетОтправитель_Key", "СчетПолучатель_Key",
+            "Комментарий",
+        ],
+    }
+
     async with await _build_client(session, fop_id, None) as client:
         # Фаза 1: ПАРАЛЕЛЬНО витягуємо документи з 1С (httpx підтримує).
-        # Це найповільніша частина — особливо при fallback на повний fetch.
         async def _fetch_one(entity: str) -> tuple[str, list[dict] | OData1CError]:
             try:
                 docs = await client.fetch_documents_period(
                     entity, body.period_from, body.period_to, expand=None,
+                    select=SELECT_FIELDS.get(entity),
                 )
                 logger.info("OData fetch %s: %d документів", entity, len(docs))
                 return entity, docs
