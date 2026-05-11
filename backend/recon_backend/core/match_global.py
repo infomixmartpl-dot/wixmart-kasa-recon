@@ -387,7 +387,46 @@ def reconcile_global(
                 notes=notes,
             ))
 
-    # ─── Крок 4: незаматчені банк → bank_only ───
+    # ─── Крок 4: amount_only — fallback по сумі+даті БЕЗ перевірки прізвища ───
+    # Юзер: «спочатку потрібно щоб була окрема група яка матчится в кінці по сумам».
+    # Сюди потрапляють залишки коли і прізвища не співпали і слова не співпали,
+    # але сума однакова і дата близько. Слабкі матчі — для ручної перевірки.
+    for bop in bank_ops:
+        if bop.id in bank_matched:
+            continue
+        expected_cash = bank_to_cash_mapping.get(bop.bank_account_id)
+        best_cop: CashOpData | None = None
+        best_dd: int = 9999
+        for cop in _candidates(bop):
+            if cop.id in cash_matched:
+                continue
+            if not _amount_close(cop.amount, bop.amount, tolerance=Decimal("1.00")):
+                continue
+            dd = _date_diff(cop.op_date, bop.op_date)
+            if dd > date_window_days:
+                continue
+            # Беремо найближчий по даті.
+            if dd < best_dd:
+                best_cop = cop
+                best_dd = dd
+        if best_cop is not None:
+            bank_matched.add(bop.id)
+            cash_matched.add(best_cop.id)
+            results.append(MatchOutcome(
+                kind="amount_only",
+                bank_op_id=bop.id,
+                cash_op_id=best_cop.id,
+                actual_cash_account_id=best_cop.cash_account_id,
+                expected_cash_account_id=expected_cash,
+                score=50.0 - best_dd,
+                date_diff_days=best_dd,
+                notes=[
+                    "Слабкий збіг — лише сума+дата, прізвище не співпало.",
+                    "Перевір вручну: можливо це не та сама операція.",
+                ],
+            ))
+
+    # ─── Крок 5: незаматчені банк → bank_only ───
     for bop in bank_ops:
         if bop.id in bank_matched:
             continue
@@ -397,7 +436,7 @@ def reconcile_global(
             notes=["Нема пари в жодній касі — треба провести в 1С"],
         ))
 
-    # ─── Крок 5: незаматчені каси → cash_only ───
+    # ─── Крок 6: незаматчені каси → cash_only ───
     for cop in cash_ops:
         if cop.id in cash_matched:
             continue

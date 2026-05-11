@@ -261,6 +261,7 @@ class ReconSession(Base):
 class MatchKind(str, Enum):
     EXACT = "exact"               # точний збіг дата+сума+тип
     FUZZY = "fuzzy"               # ±14 днів + сума + контрагент
+    AMOUNT_ONLY = "amount_only"   # тільки сума+дата співпадають — слабкий, треба перевірити
     PERESORT = "peresort"         # каса А ↔ виписка Б (не та каса!)
     BANK_ONLY = "bank_only"       # тільки в банку, треба провести в касу
     CASH_ONLY = "cash_only"       # тільки в касі, нема в банку (готівка?)
