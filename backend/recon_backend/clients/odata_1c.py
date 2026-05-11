@@ -56,11 +56,18 @@ class OData1CClient:
         username: str,
         password: str,
         *,
-        timeout_s: float = 30.0,
+        timeout_s: float = 120.0,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self._auth = httpx.BasicAuth(username, password)
-        self._timeout = timeout_s
+        # 1С повільно віддає великі сторінки документів (готівкові з усією
+        # історією). Розділяємо read/connect: connect швидкий, read довгий.
+        self._timeout = httpx.Timeout(
+            connect=10.0,
+            read=timeout_s,
+            write=30.0,
+            pool=10.0,
+        )
         self._client: httpx.AsyncClient | None = None
 
     async def __aenter__(self) -> OData1CClient:
