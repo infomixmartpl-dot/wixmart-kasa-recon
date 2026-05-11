@@ -275,6 +275,47 @@ def _load_dvizhenie_report_tree(df: pd.DataFrame, *, only_transfers: bool = Fals
         _re.IGNORECASE,
     )
 
+    # Спочатку — ПРОХІД 1: збираємо всі рядки переміщень з обома сторонами.
+    # key = (doc_number, amount, date) → {'sender': cash_name, 'receiver': cash_name}
+    transfers_index: dict[tuple, dict[str, str]] = {}
+    current_kasa_idx = ""
+    for _, raw in df.iterrows():
+        first_val_raw = raw[first_col]
+        if pd.isna(first_val_raw):
+            continue
+        first_val = str(first_val_raw).strip()
+        if not first_val:
+            continue
+        low = first_val.lower()
+        is_doc = any(k in low for k in [
+            "поступление", "поступлення", "расход", "видаток",
+            "списание", "списання", "перемещение", "переміщення",
+        ])
+        if not is_doc:
+            current_kasa_idx = first_val
+            continue
+        if "перемещ" not in low and "переміщ" not in low:
+            continue
+        m = doc_re.match(first_val)
+        if not m:
+            continue
+        _, doc_num, date_str = m.groups()
+        op_d = _parse_date(date_str)
+        if op_d is None or not current_kasa_idx:
+            continue
+        amt_in = _parse_amount(raw[postup_col])
+        amt_out = _parse_amount(raw[rashod_col])
+        amt = amt_in if (amt_in and amt_in > 0) else amt_out
+        if not amt or amt <= 0:
+            continue
+        key = (doc_num, str(amt), op_d.isoformat())
+        entry = transfers_index.setdefault(key, {})
+        if amt_in and amt_in > 0:
+            entry["receiver"] = current_kasa_idx
+        elif amt_out and amt_out > 0:
+            entry["sender"] = current_kasa_idx
+
+    # ПРОХІД 2: створюємо реальні CashJournalRow з повною інформацією про пару.
     rows: list[CashJournalRow] = []
     skipped_no_date = 0
     skipped_no_amount = 0
@@ -320,24 +361,39 @@ def _load_dvizhenie_report_tree(df: pd.DataFrame, *, only_transfers: bool = Fals
         amount_in = _parse_amount(raw[postup_col])
         amount_out = _parse_amount(raw[rashod_col])
 
+        # side: ← (відправник, гроші пішли з каси) / → (одержувач, гроші прийшли)
         if amount_in is not None and amount_in > 0:
-            # Для переміщень: amount у Поступление = каса-одержувач.
-            # Для звичайних ПКО — це прихід. У БД пишемо op_type=Перемещение
-            # якщо це переміщення, інакше ПКО.
             op_type = "Перемещение" if is_transfer else "ПКО"
             amount = amount_in
+            side = "одержувач (→)"
         elif amount_out is not None and amount_out > 0:
             op_type = "Перемещение" if is_transfer else "ВКО"
             amount = amount_out
+            side = "відправник (←)"
         else:
             skipped_no_amount += 1
             continue
 
         # Документ-номер з префіксом «ПЕРЕМ-» / «ПКО-» / «ВКО-» щоб не
         # колідувати з номерами з «Список transaction» (НФНФ-XXXXXX).
-        # Краще створити унікальний ключ ніж випадково перетертися дублем.
         prefix = "ПЕРЕМ" if is_transfer else type_text.upper().replace(" ", "")[:5]
         unique_doc = f"{prefix}-{doc_number}"
+
+        # Для переміщень додаємо мітку сторони у operation і comment —
+        # щоб юзер у модалці бачив це відправник чи одержувач + ОБИДВІ каси.
+        if is_transfer:
+            key = (doc_number, str(amount), op_date.isoformat())
+            pair = transfers_index.get(key, {})
+            sender = pair.get("sender", "?")
+            receiver = pair.get("receiver", "?")
+            operation_label = f"Переміщення — ця каса {side}"
+            comment_label = (
+                f"З каси: {sender}  →  У касу: {receiver}  "
+                f"| ця каса = {side} | {first_val}"
+            )
+        else:
+            operation_label = type_text.strip()
+            comment_label = first_val
 
         rows.append(CashJournalRow(
             op_date=op_date,
@@ -346,8 +402,8 @@ def _load_dvizhenie_report_tree(df: pd.DataFrame, *, only_transfers: bool = Fals
             op_type=op_type,
             cash_account_name=current_kasa,
             counterparty="",
-            operation=type_text.strip(),
-            comment=first_val,  # повний рядок для детального перегляду
+            operation=operation_label,
+            comment=comment_label,
             structural_unit="",
         ))
 

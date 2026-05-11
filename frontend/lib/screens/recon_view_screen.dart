@@ -129,12 +129,11 @@ class _TabContent extends ConsumerWidget {
         final filtered = rows.where((r) {
           if (!subset.contains(r.kind)) return false;
           if (r.kind == 'cash_only') {
-            final opType = (r.cashOp ?? {})['op_type']?.toString() ?? '';
             final cashAcc = (r.cashOp ?? {})['cash_account_id']?.toString() ?? '';
-            final isTransfer = opType.toLowerCase().contains('перемещ') ||
-                opType.toLowerCase().contains('переміщ');
-            // Приховуємо переміщення ТІЛЬКИ якщо НЕ стосується банк-каси.
-            if (isTransfer && !bankExpected.contains(cashAcc)) {
+            // У вкладці «Питання» показуємо ТІЛЬКИ операції тих кас,
+            // які мапляться з банк-рахунків. Інші каси (Касса Руслан,
+            // Касса Таня тощо) — не стосуються звірки з твоїм Privat.
+            if (!bankExpected.contains(cashAcc)) {
               return false;
             }
           }
@@ -542,29 +541,61 @@ class _ManualMatchPicker extends ConsumerWidget {
         data: (l) => {for (final c in l) c.id: c.name1c},
         orElse: () => <String, String>{});
 
+    // Множина expected cash_account_id — каси які мапляться з банк-рахунків.
+    // Кандидати на цих касах піднімаються нагору списку і підсвічуються.
+    final expectedCashes = ref.watch(bankAccountsProvider).maybeWhen(
+      data: (banks) => banks
+          .where((b) => b.expectedCashAccountId != null)
+          .map((b) => b.expectedCashAccountId!)
+          .toSet(),
+      orElse: () => <String>{},
+    );
+    // Конкретна expected_cash для banку який зараз матчимо.
+    final myBankAccId = bankOp['bank_account_id']?.toString();
+    final myExpectedCash = ref.watch(bankAccountsProvider).maybeWhen(
+      data: (banks) {
+        final b = banks.where((x) => x.id == myBankAccId).toList();
+        return b.isEmpty ? null : b.first.expectedCashAccountId;
+      },
+      orElse: () => null,
+    );
+
     final targetAmount = double.tryParse(bankOp['amount']?.toString() ?? '0') ?? 0;
 
     return AlertDialog(
       title: Text('Знайти пару для ${bankOp['amount']} грн'),
       content: SizedBox(
-        width: 720,
-        height: 480,
+        width: 760,
+        height: 520,
         child: rowsAsync.when(
           loading: () => const Center(child: CircularProgressIndicator()),
           error: (e, _) => Text('$e'),
           data: (rows) {
-            // Кандидати: cash_only або amount_only або fuzzy без user_status=approved.
-            // Сортуємо за близькістю суми.
             final candidates = rows.where((r) {
               if (r.kind != 'cash_only' && r.kind != 'amount_only') return false;
               if (r.cashOp == null) return false;
               return true;
-            }).toList()
-              ..sort((a, b) {
-                final ap = double.tryParse(a.cashOp?['amount']?.toString() ?? '0') ?? 0;
-                final bp = double.tryParse(b.cashOp?['amount']?.toString() ?? '0') ?? 0;
-                return (ap - targetAmount).abs().compareTo((bp - targetAmount).abs());
-              });
+            }).toList();
+
+            // Сортування: ПРІОРИТЕТ — каси з мапінгу bank→cash.
+            // Спочатку моя expected_cash, потім інші expected, потім решта.
+            // Усередині кожної групи — за близькістю суми.
+            candidates.sort((a, b) {
+              final ac = a.cashOp?['cash_account_id']?.toString();
+              final bc = b.cashOp?['cash_account_id']?.toString();
+              int priority(String? cashId) {
+                if (cashId == null) return 3;
+                if (cashId == myExpectedCash) return 0;
+                if (expectedCashes.contains(cashId)) return 1;
+                return 2;
+              }
+              final pa = priority(ac);
+              final pb = priority(bc);
+              if (pa != pb) return pa.compareTo(pb);
+              final ap = double.tryParse(a.cashOp?['amount']?.toString() ?? '0') ?? 0;
+              final bp = double.tryParse(b.cashOp?['amount']?.toString() ?? '0') ?? 0;
+              return (ap - targetAmount).abs().compareTo((bp - targetAmount).abs());
+            });
 
             if (candidates.isEmpty) {
               return const Center(
@@ -579,17 +610,42 @@ class _ManualMatchPicker extends ConsumerWidget {
                 final c = r.cashOp ?? {};
                 final amount = c['amount']?.toString() ?? '';
                 final date = (c['op_date']?.toString() ?? '').substring(0, 10);
-                final cashName = cashes[c['cash_account_id']] ?? '';
-                return ListTile(
-                  dense: true,
-                  title: Text(
-                      '$date • $amount грн • ${c['op_type'] ?? ''} №${c['doc_number'] ?? ''}'),
-                  subtitle: Text(
-                      '${c['counterparty'] ?? ''}  •  каса: $cashName',
-                      overflow: TextOverflow.ellipsis),
-                  trailing: FilledButton(
-                    onPressed: () => Navigator.pop(context, r.cashOpId),
-                    child: const Text('Вибрати'),
+                final cashAccId = c['cash_account_id']?.toString();
+                final cashName = cashes[cashAccId] ?? '';
+                final isMyExpected = cashAccId == myExpectedCash;
+                final isExpected = cashAccId != null && expectedCashes.contains(cashAccId);
+                return Container(
+                  color: isMyExpected
+                      ? AppColors.lime.withValues(alpha: 0.10)
+                      : (isExpected ? AppColors.sea.withValues(alpha: 0.05) : null),
+                  child: ListTile(
+                    dense: true,
+                    title: Text(
+                        '$date • $amount грн • ${c['op_type'] ?? ''} №${c['doc_number'] ?? ''}'),
+                    subtitle: Row(
+                      children: [
+                        if (isMyExpected)
+                          Container(
+                            margin: const EdgeInsets.only(right: 6),
+                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: AppColors.lime,
+                              borderRadius: BorderRadius.circular(3),
+                            ),
+                            child: const Text('ВАША КАСА',
+                                style: TextStyle(fontSize: 9, color: Colors.white, fontWeight: FontWeight.w700)),
+                          ),
+                        Expanded(
+                          child: Text(
+                              '${c['counterparty'] ?? ''}  •  каса: $cashName',
+                              overflow: TextOverflow.ellipsis),
+                        ),
+                      ],
+                    ),
+                    trailing: FilledButton(
+                      onPressed: () => Navigator.pop(context, r.cashOpId),
+                      child: const Text('Вибрати'),
+                    ),
                   ),
                 );
               },
