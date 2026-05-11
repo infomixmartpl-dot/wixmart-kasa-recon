@@ -12,9 +12,20 @@ import os
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+from sqlalchemy import event
+from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from .models import Base
+
+
+# SQLite за замовч. ігнорує FOREIGN KEY — каскадні DELETE не спрацьовують,
+# і ORM cascade у async-режимі зависає на lazy-load. Вмикаємо FK глобально.
+@event.listens_for(Engine, "connect")
+def _enable_sqlite_fk(dbapi_conn, _connection_record) -> None:
+    cur = dbapi_conn.cursor()
+    cur.execute("PRAGMA foreign_keys=ON")
+    cur.close()
 
 
 def _resolve_db_path() -> Path:
