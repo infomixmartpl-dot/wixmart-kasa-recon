@@ -36,7 +36,7 @@ class AccountsScreen extends ConsumerWidget {
       body: Padding(
         padding: const EdgeInsets.all(20),
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             // Колонка: банк-рахунки
             Expanded(
@@ -62,8 +62,10 @@ class AccountsScreen extends ConsumerWidget {
                       );
                     }
                     final cashes = cashesAsync.maybeWhen(data: (l) => l, orElse: () => <CashAccount>[]);
-                    return Column(
-                      children: banks.map((b) {
+                    return ListView.builder(
+                      itemCount: banks.length,
+                      itemBuilder: (_, i) {
+                        final b = banks[i];
                         final mapped = cashes.where((c) => c.id == b.expectedCashAccountId).toList();
                         final mappedName = mapped.isEmpty ? null : mapped.first.name1c;
                         return ListTile(
@@ -88,7 +90,7 @@ class AccountsScreen extends ConsumerWidget {
                             },
                           ),
                         );
-                      }).toList(),
+                      },
                     );
                   },
                 ),
@@ -117,26 +119,28 @@ class AccountsScreen extends ConsumerWidget {
                         child: Text('Поки немає жодної каси.', style: TextStyle(color: AppColors.muted)),
                       );
                     }
-                    return Column(
-                      children: cashes
-                          .map((c) => ListTile(
-                                contentPadding: EdgeInsets.zero,
-                                leading: Icon(
-                                  c.kind == 'cash' ? Icons.payments_outlined : Icons.account_balance_outlined,
-                                  color: AppColors.sea,
-                                ),
-                                title: Text(c.name1c, style: const TextStyle(fontWeight: FontWeight.w600)),
-                                subtitle: Text('тип: ${c.kind}',
-                                    style: const TextStyle(fontSize: 11, color: AppColors.muted)),
-                                trailing: IconButton(
-                                  icon: const Icon(Icons.delete_outline, size: 18),
-                                  onPressed: () async {
-                                    await ref.read(cashAccountRepoProvider).delete(c.id);
-                                    ref.invalidate(cashAccountsProvider);
-                                  },
-                                ),
-                              ))
-                          .toList(),
+                    return ListView.builder(
+                      itemCount: cashes.length,
+                      itemBuilder: (_, i) {
+                        final c = cashes[i];
+                        return ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: Icon(
+                            c.kind == 'cash' ? Icons.payments_outlined : Icons.account_balance_outlined,
+                            color: AppColors.sea,
+                          ),
+                          title: Text(c.name1c, style: const TextStyle(fontWeight: FontWeight.w600)),
+                          subtitle: Text('тип: ${c.kind}',
+                              style: const TextStyle(fontSize: 11, color: AppColors.muted)),
+                          trailing: IconButton(
+                            icon: const Icon(Icons.delete_outline, size: 18),
+                            onPressed: () async {
+                              await ref.read(cashAccountRepoProvider).delete(c.id);
+                              ref.invalidate(cashAccountsProvider);
+                            },
+                          ),
+                        );
+                      },
                     );
                   },
                 ),
@@ -178,7 +182,7 @@ class _SectionCard extends StatelessWidget {
             const SizedBox(height: 4),
             Text(description, style: const TextStyle(color: AppColors.muted, fontSize: 12)),
             const Divider(height: 24),
-            child,
+            Expanded(child: child),
           ],
         ),
       ),
