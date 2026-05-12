@@ -104,6 +104,64 @@ class OData1CClient:
             raise OData1CError(f"HTTP {r.status_code} {url}: {r.text[:300]}")
         return r
 
+    async def _post(self, url: str, *, json_body: dict) -> httpx.Response:
+        """POST з JSON body. Використовується для створення документів у 1С."""
+        if not self._client:
+            raise RuntimeError("Використовуй `async with OData1CClient(...)`.")
+        try:
+            r = await self._client.post(
+                url,
+                json=json_body,
+                headers={"Content-Type": "application/json"},
+                params={"$format": "json"},
+            )
+        except httpx.HTTPError as e:
+            raise OData1CError(f"HTTP помилка POST {url}: {e}") from e
+        if r.status_code == 401:
+            raise OData1CError("Невірний логін/пароль 1С (401).")
+        if r.status_code == 403:
+            raise OData1CError("Користувач 1С без прав запису (403). Потрібна роль з правами на створення документів.")
+        if r.status_code >= 400:
+            raise OData1CError(f"HTTP {r.status_code} POST {url}: {r.text[:500]}")
+        return r
+
+    async def _delete(self, url: str) -> httpx.Response:
+        """DELETE документа у 1С (за повним URL з Ref_Key)."""
+        if not self._client:
+            raise RuntimeError("Використовуй `async with OData1CClient(...)`.")
+        try:
+            r = await self._client.delete(url)
+        except httpx.HTTPError as e:
+            raise OData1CError(f"HTTP помилка DELETE {url}: {e}") from e
+        if r.status_code >= 400:
+            raise OData1CError(f"HTTP {r.status_code} DELETE {url}: {r.text[:500]}")
+        return r
+
+    async def create_document(self, entity_set: str, fields: dict) -> dict:
+        """Створити документ у 1С через OData POST.
+
+        Args:
+            entity_set: наприклад 'Document_ПоступлениеВКассу'.
+            fields: словник полів документа (Date, Касса_Key, СуммаДокумента, etc.).
+
+        Returns:
+            JSON відповідь від 1С з полями створеного документа (включно Ref_Key).
+        """
+        url = f"{self.base_url}/{entity_set}"
+        r = await self._post(url, json_body=fields)
+        return r.json()
+
+    async def delete_document(self, entity_set: str, ref_key: str) -> None:
+        """Помітити документ як видалений у 1С (set DeletionMark=true).
+
+        НЕ повне видалення — у 1С документи позначаються на видалення, а
+        реальне видалення робить адмін окремо. PATCH/PUT через OData
+        зазвичай не дозволено, тому використовуємо стандартний DELETE
+        OData v3 який ставить помітку на видалення.
+        """
+        url = f"{self.base_url}/{entity_set}(guid'{ref_key}')"
+        await self._delete(url)
+
     # ─── Метадані ───────────────────────────────────────────────────
 
     async def fetch_metadata(self) -> str:

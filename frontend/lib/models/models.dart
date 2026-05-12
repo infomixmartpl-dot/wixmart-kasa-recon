@@ -234,3 +234,33 @@ class HealthStatus {
         db: j['db'] as String,
       );
 }
+
+class Pidrozdil {
+  Pidrozdil({required this.id, required this.name1c, this.instagramHandle, this.odataRef});
+  final String id;
+  final String name1c;
+  final String? instagramHandle;
+  final String? odataRef;
+
+  factory Pidrozdil.fromJson(Map<String, dynamic> j) => Pidrozdil(
+        id: j['id'] as String,
+        name1c: j['name_1c'] as String,
+        instagramHandle: j['instagram_handle'] as String?,
+        odataRef: j['odata_ref'] as String?,
+      );
+}
+
+class Stattia {
+  Stattia({required this.id, required this.name1c, this.movementType, this.odataRef});
+  final String id;
+  final String name1c;
+  final String? movementType;
+  final String? odataRef;
+
+  factory Stattia.fromJson(Map<String, dynamic> j) => Stattia(
+        id: j['id'] as String,
+        name1c: j['name_1c'] as String,
+        movementType: j['movement_type'] as String?,
+        odataRef: j['odata_ref'] as String?,
+      );
+}

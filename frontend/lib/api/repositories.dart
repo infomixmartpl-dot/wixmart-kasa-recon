@@ -296,11 +296,21 @@ class ReconRepository {
     return r.data ?? {};
   }
 
-  /// Виконати дію над рядком (Етап 1: тільки approve_no_op).
-  Future<Map<String, dynamic>> executeAction(String rowId, String actionId) async {
+  /// Виконати дію над рядком.
+  /// Для create_pko/create_vko треба передати pidrozdilId і stattiaId.
+  Future<Map<String, dynamic>> executeAction(
+    String rowId,
+    String actionId, {
+    String? pidrozdilId,
+    String? stattiaId,
+  }) async {
     final r = await _api.post<Map<String, dynamic>>(
       '/api/recon/rows/$rowId/execute-action',
       query: {'action_id': actionId},
+      data: {
+        if (pidrozdilId != null) 'pidrozdil_id': pidrozdilId,
+        if (stattiaId != null) 'stattia_id': stattiaId,
+      },
     );
     return r.data ?? {};
   }
@@ -308,3 +318,23 @@ class ReconRepository {
 
 String _isoDate(DateTime d) =>
     '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+class PidrozdilRepository {
+  PidrozdilRepository(this._api);
+  final ApiClient _api;
+
+  Future<List<Pidrozdil>> listByFop(String fopId) async {
+    final r = await _api.get<List<dynamic>>('/api/pidrozdily/', query: {'fop_id': fopId});
+    return (r.data ?? []).map((e) => Pidrozdil.fromJson(e as Map<String, dynamic>)).toList();
+  }
+}
+
+class StattiaRepository {
+  StattiaRepository(this._api);
+  final ApiClient _api;
+
+  Future<List<Stattia>> listByFop(String fopId) async {
+    final r = await _api.get<List<dynamic>>('/api/statti/', query: {'fop_id': fopId});
+    return (r.data ?? []).map((e) => Stattia.fromJson(e as Map<String, dynamic>)).toList();
+  }
+}

@@ -815,34 +815,111 @@ async def preview_row_actions(
     }
 
 
+class ExecuteActionRequest(BaseModel):
+    pidrozdil_id: str | None = None
+    stattia_id: str | None = None
+
+
 @router.post("/rows/{row_id}/execute-action")
 async def execute_row_action(
     row_id: str,
     action_id: str,
+    body: ExecuteActionRequest | None = None,
     session: AsyncSession = Depends(get_session),
 ):
     """Виконати дію над рядком.
 
-    Етап 1: реалізовано тільки `approve_no_op` (просто mark approved у БД).
-    Етап 2: створення документів через OData POST.
-    Етап 3: видалення / редагування документів.
+    - `approve_no_op` — позначити approved у БД (без 1С).
+    - `create_pko` / `create_vko` — створити документ у 1С через OData POST.
+      Потребує `pidrozdil_id` і `stattia_id` у body.
+    Решта дій — буде у наступних PR.
     """
+    from datetime import datetime
+    from ..clients import OData1CClient, OData1CError
+    from ..db.models import Pidrozdil, Stattia
+
     row = await session.get(MatchRow, row_id)
     if not row:
         raise HTTPException(status_code=404, detail="Рядок не знайдено")
 
     if action_id == "approve_no_op":
-        from datetime import datetime
         row.user_status = "approved"
         row.approved = True
         row.approved_at = datetime.utcnow()
         await session.commit()
         return {"executed": True, "action": action_id, "note": "Підтверджено, без змін у 1С."}
 
-    # Решта дій — поки що не реалізовано (Етап 2).
+    if action_id not in ("create_pko", "create_vko"):
+        return {
+            "executed": False,
+            "action": action_id,
+            "error": "Ця дія ще не реалізована.",
+        }
+
+    if not body or not body.pidrozdil_id or not body.stattia_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Обов'язково передати pidrozdil_id і stattia_id у body.",
+        )
+
+    sess = await session.get(ReconSession, row.session_id)
+    bank = await session.get(BankOp, row.bank_op_id) if row.bank_op_id else None
+    if not bank:
+        raise HTTPException(status_code=400, detail="Рядок не має банк-операції.")
+    bank_acc = await session.get(BankAccount, bank.bank_account_id)
+    if not bank_acc or not bank_acc.expected_cash_account_id:
+        raise HTTPException(status_code=400, detail="Банк-рахунок без мапінгу на касу 1С.")
+    cash_acc = await session.get(CashAccount, bank_acc.expected_cash_account_id)
+    pidr = await session.get(Pidrozdil, body.pidrozdil_id)
+    stat = await session.get(Stattia, body.stattia_id)
+    fop = await session.get(Fop, sess.fop_id)
+
+    if not (cash_acc and cash_acc.odata_ref and pidr and pidr.odata_ref
+            and stat and stat.odata_ref and fop):
+        raise HTTPException(status_code=400,
+            detail="Не вистачає odata_ref для каси/підрозділу/статті або немає ФОПа.")
+    if not (fop.odata_base_url and fop.odata_username and fop.odata_password):
+        raise HTTPException(status_code=400, detail="У ФОПа нема OData credentials.")
+
+    entity = "Document_ПоступлениеВКассу" if action_id == "create_pko" else "Document_РасходИзКассы"
+    payload = {
+        "Date": f"{bank.op_date.isoformat()}T00:00:00",
+        "Касса_Key": cash_acc.odata_ref,
+        "СуммаДокумента": str(bank.amount),
+        "Подразделение_Key": pidr.odata_ref,
+        "СтатьяДвиженияДенежныхСредств_Key": stat.odata_ref,
+        "Комментарий": (
+            f"З звірки Privat {bank.op_date}: {bank.counterparty or ''} {bank.purpose or ''}"
+        )[:500],
+    }
+
+    try:
+        async with OData1CClient(
+            fop.odata_base_url, fop.odata_username, fop.odata_password,
+        ) as client:
+            response = await client.create_document(entity, payload)
+    except OData1CError as e:
+        return {
+            "executed": False,
+            "action": action_id,
+            "error": str(e),
+            "payload_sent": payload,
+        }
+
+    new_ref = response.get("Ref_Key")
+    new_number = response.get("Number")
+    row.posted_doc_ref = new_ref
+    row.user_status = "approved"
+    row.approved = True
+    row.approved_at = datetime.utcnow()
+    note_suffix = f"Створено в 1С: №{new_number} (Ref {new_ref})"
+    row.notes = f"{row.notes}\n{note_suffix}" if row.notes else note_suffix
+    await session.commit()
+
     return {
-        "executed": False,
+        "executed": True,
         "action": action_id,
-        "error": "Ця дія потребує OData POST у 1С — буде реалізована у Етапі 2.",
-        "todo": "Підтримай зворотній зв'язок: чи виконувати на копії Fish для тесту?",
+        "created_doc_number": new_number,
+        "created_doc_ref": new_ref,
+        "note": f"Створено {entity} №{new_number} у 1С.",
     }

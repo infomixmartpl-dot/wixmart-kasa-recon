@@ -48,3 +48,20 @@ final reconSessionsProvider = FutureProvider.autoDispose<List<ReconSession>>((re
   if (fop == null) return [];
   return ref.read(reconRepoProvider).listSessions(fop.id);
 });
+
+/// Підрозділи активного ФОПа (для dropdown у діях 1С).
+final pidrozdilyProvider = FutureProvider.autoDispose<List<Pidrozdil>>((ref) async {
+  final fop = ref.watch(selectedFopProvider);
+  if (fop == null) return [];
+  return ref.read(pidrozdilRepoProvider).listByFop(fop.id);
+});
+
+/// Статті руху коштів активного ФОПа.
+final stattiProvider = FutureProvider.autoDispose<List<Stattia>>((ref) async {
+  final fop = ref.watch(selectedFopProvider);
+  if (fop == null) return [];
+  return ref.read(stattiaRepoProvider).listByFop(fop.id);
+});
+
+final pidrozdilRepoProvider = Provider((ref) => PidrozdilRepository(ref.read(apiClientProvider)));
+final stattiaRepoProvider = Provider((ref) => StattiaRepository(ref.read(apiClientProvider)));
