@@ -126,6 +126,22 @@ class Pidrozdil(Base):
     __table_args__ = (UniqueConstraint("fop_id", "name_1c"),)
 
 
+class Stattia(Base):
+    """Стаття руху грошових коштів («От покупателя», «Поставщику», «Зарплата»)."""
+
+    __tablename__ = "stattia"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    fop_id: Mapped[str] = mapped_column(String(36), ForeignKey("fop.id", ondelete="CASCADE"))
+    name_1c: Mapped[str] = mapped_column(String(200))
+    # Тип руху: incoming / outgoing — для фільтрації у UI.
+    # У 1С це поле «Вид движения денежных средств».
+    movement_type: Mapped[str | None] = mapped_column(String(20))
+    odata_ref: Mapped[str | None] = mapped_column(String(50))
+
+    __table_args__ = (UniqueConstraint("fop_id", "name_1c"),)
+
+
 class MonthlyOborot(Base):
     """Оборот підрозділу за місяць (для пропорційного розподілу витрат)."""
 

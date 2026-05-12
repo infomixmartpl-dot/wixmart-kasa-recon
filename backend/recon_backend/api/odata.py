@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 logger = logging.getLogger(__name__)
 
 from ..clients import OData1CClient, OData1CError
-from ..db.models import CashAccount, CashOp, CashOpType, Fop, Pidrozdil
+from ..db.models import CashAccount, CashOp, CashOpType, Fop, Pidrozdil, Stattia
 from ..db.session import get_session
 
 router = APIRouter()
@@ -139,6 +139,7 @@ async def sync_catalogs(
     fop_id: str,
     catalog_kasy: list[str] | None = None,
     catalog_pidrozdil: str = "Catalog_СтруктурныеЕдиницы",
+    catalog_stattia: str = "Catalog_СтатьиДвиженияДенежныхСредств",
     override: ODataConfigOverride | None = None,
     session: AsyncSession = Depends(get_session),
 ):
@@ -161,6 +162,8 @@ async def sync_catalogs(
     updated_cash = 0
     added_pidr = 0
     updated_pidr = 0
+    added_stat = 0
+    updated_stat = 0
     errors: list[str] = []
 
     async with await _build_client(session, fop_id, override) as client:
@@ -213,10 +216,37 @@ async def sync_catalogs(
                 session.add(Pidrozdil(fop_id=fop_id, name_1c=name, odata_ref=ref))
                 added_pidr += 1
 
+        # Статті руху коштів
+        try:
+            stats = await client.fetch_all(catalog_stattia)
+        except OData1CError as e:
+            errors.append(f"Статті руху коштів: {e}")
+            stats = []
+        for item in stats:
+            ref = item.get("Ref_Key")
+            name = item.get("Description") or item.get("Name")
+            if not (ref and name):
+                continue
+            movement = item.get("ВидДвиженияДенежныхСредств") or item.get("ВидДвижения") or ""
+            existing = await session.execute(
+                select(Stattia).where(Stattia.odata_ref == ref)
+            )
+            row = existing.scalar_one_or_none()
+            if row:
+                if row.name_1c != name:
+                    row.name_1c = name
+                    updated_stat += 1
+            else:
+                session.add(Stattia(
+                    fop_id=fop_id, name_1c=name, odata_ref=ref,
+                    movement_type=str(movement) if movement else None,
+                ))
+                added_stat += 1
+
     await session.commit()
     return {
-        "added": {"cash_accounts": added_cash, "pidrozdily": added_pidr},
-        "updated": {"cash_accounts": updated_cash, "pidrozdily": updated_pidr},
+        "added": {"cash_accounts": added_cash, "pidrozdily": added_pidr, "statti": added_stat},
+        "updated": {"cash_accounts": updated_cash, "pidrozdily": updated_pidr, "statti": updated_stat},
         "errors": errors,
     }
 

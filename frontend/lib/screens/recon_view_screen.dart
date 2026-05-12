@@ -763,11 +763,15 @@ class _RowActionsDialog extends ConsumerStatefulWidget {
 class _RowActionsDialogState extends ConsumerState<_RowActionsDialog> {
   bool _busy = false;
   String? _lastResult;
+  String? _selectedPidrozdilId;
+  String? _selectedStattiaId;
 
   @override
   Widget build(BuildContext context) {
     final actions = (widget.preview['actions'] as List?) ?? [];
     final note = widget.preview['note']?.toString() ?? '';
+    final pidrozdilyAsync = ref.watch(pidrozdilyProvider);
+    final stattiAsync = ref.watch(stattiProvider);
 
     return AlertDialog(
       title: const Text('Дії в 1С — preview і виконання'),
@@ -794,6 +798,9 @@ class _RowActionsDialogState extends ConsumerState<_RowActionsDialog> {
                 final explanation = a['explanation']?.toString() ?? '';
                 final safe = (a['safe'] as bool?) ?? true;
                 final target = a['target_entity']?.toString();
+                final needsDropdowns = id == 'create_pko' || id == 'create_vko';
+                final canExecute = !_busy && (!needsDropdowns ||
+                    (_selectedPidrozdilId != null && _selectedStattiaId != null));
                 return Card(
                   child: Padding(
                     padding: const EdgeInsets.all(12),
@@ -808,6 +815,56 @@ class _RowActionsDialogState extends ConsumerState<_RowActionsDialog> {
                           Text('1C entity: $target',
                               style: const TextStyle(fontSize: 11, fontFamily: 'monospace', color: AppColors.muted)),
                         ],
+                        if (needsDropdowns) ...[
+                          const SizedBox(height: 8),
+                          pidrozdilyAsync.when(
+                            data: (pidrozdily) => DropdownButtonFormField<String>(
+                              value: _selectedPidrozdilId,
+                              decoration: const InputDecoration(
+                                labelText: 'Підрозділ *',
+                                isDense: true,
+                                border: OutlineInputBorder(),
+                              ),
+                              items: pidrozdily.map((p) => DropdownMenuItem(
+                                value: p.id,
+                                child: Text(p.name1c, overflow: TextOverflow.ellipsis),
+                              )).toList(),
+                              onChanged: (v) => setState(() => _selectedPidrozdilId = v),
+                            ),
+                            loading: () => const LinearProgressIndicator(),
+                            error: (e, _) => Text('Помилка: $e', style: const TextStyle(color: AppColors.danger)),
+                          ),
+                          const SizedBox(height: 8),
+                          stattiAsync.when(
+                            data: (statti) => statti.isEmpty
+                                ? Container(
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.warn.withValues(alpha: 0.10),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: const Text(
+                                      'Статей руху коштів НЕМАЄ у БД. Зайди у «1С OData» і натисни «Синхронізувати каси + підрозділи» — підтягне і статті.',
+                                      style: TextStyle(fontSize: 11, color: AppColors.warn),
+                                    ),
+                                  )
+                                : DropdownButtonFormField<String>(
+                                    value: _selectedStattiaId,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Стаття руху коштів *',
+                                      isDense: true,
+                                      border: OutlineInputBorder(),
+                                    ),
+                                    items: statti.map((s) => DropdownMenuItem(
+                                      value: s.id,
+                                      child: Text(s.name1c, overflow: TextOverflow.ellipsis),
+                                    )).toList(),
+                                    onChanged: (v) => setState(() => _selectedStattiaId = v),
+                                  ),
+                            loading: () => const LinearProgressIndicator(),
+                            error: (e, _) => Text('Помилка: $e', style: const TextStyle(color: AppColors.danger)),
+                          ),
+                        ],
                         const SizedBox(height: 8),
                         Row(
                           children: [
@@ -816,7 +873,7 @@ class _RowActionsDialogState extends ConsumerState<_RowActionsDialog> {
                                 backgroundColor: safe ? AppColors.lime : AppColors.danger,
                                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                               ),
-                              onPressed: _busy ? null : () => _execute(id),
+                              onPressed: canExecute ? () => _execute(id) : null,
                               child: Text(safe ? 'Виконати' : 'Виконати (небезпечно)'),
                             ),
                           ],
@@ -853,7 +910,12 @@ class _RowActionsDialogState extends ConsumerState<_RowActionsDialog> {
       _lastResult = null;
     });
     try {
-      final r = await ref.read(reconRepoProvider).executeAction(widget.rowId, actionId);
+      final r = await ref.read(reconRepoProvider).executeAction(
+            widget.rowId,
+            actionId,
+            pidrozdilId: _selectedPidrozdilId,
+            stattiaId: _selectedStattiaId,
+          );
       setState(() {
         _busy = false;
         _lastResult = r.entries.map((e) => '${e.key}: ${e.value}').join('\n');

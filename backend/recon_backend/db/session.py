@@ -59,6 +59,8 @@ async def init_db() -> None:
             await conn.execute(text("ALTER TABLE match_row ADD COLUMN user_status VARCHAR(20)"))
         if "manual" not in cols:
             await conn.execute(text("ALTER TABLE match_row ADD COLUMN manual BOOLEAN DEFAULT 0 NOT NULL"))
+        # Міграція v3: створити таблицю stattia якщо ще нема. create_all уже
+        # обробляє це, але якщо є залишки від попередніх версій — пропустимо.
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:
