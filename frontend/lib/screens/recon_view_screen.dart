@@ -484,6 +484,25 @@ class _MatchRowDetailsDialog extends ConsumerWidget {
         ),
       ),
       actions: [
+        // Завжди — кнопка «Дії в 1С» (preview дій + execute).
+        TextButton.icon(
+          icon: const Icon(Icons.electrical_services, size: 16),
+          label: const Text('Дії в 1С'),
+          onPressed: () async {
+            final messenger = ScaffoldMessenger.of(context);
+            try {
+              final preview = await ref.read(reconRepoProvider).previewActions(row.id);
+              if (!context.mounted) return;
+              await showDialog(
+                context: context,
+                builder: (_) => _RowActionsDialog(rowId: row.id, preview: preview),
+              );
+              ref.invalidate(_rowsProvider);
+            } catch (e) {
+              messenger.showSnackBar(SnackBar(content: Text('Помилка: $e')));
+            }
+          },
+        ),
         // bank_only — кнопка «Намапити вручну» (відкриває пошук кандидатів).
         if (row.kind == 'bank_only')
           TextButton.icon(
@@ -728,5 +747,122 @@ class _ManualMatchPicker extends ConsumerWidget {
         TextButton(onPressed: () => Navigator.pop(context), child: const Text('Скасувати')),
       ],
     );
+  }
+}
+
+
+class _RowActionsDialog extends ConsumerStatefulWidget {
+  const _RowActionsDialog({required this.rowId, required this.preview});
+  final String rowId;
+  final Map<String, dynamic> preview;
+
+  @override
+  ConsumerState<_RowActionsDialog> createState() => _RowActionsDialogState();
+}
+
+class _RowActionsDialogState extends ConsumerState<_RowActionsDialog> {
+  bool _busy = false;
+  String? _lastResult;
+
+  @override
+  Widget build(BuildContext context) {
+    final actions = (widget.preview['actions'] as List?) ?? [];
+    final note = widget.preview['note']?.toString() ?? '';
+
+    return AlertDialog(
+      title: const Text('Дії в 1С — preview і виконання'),
+      content: SizedBox(
+        width: 720,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (note.isNotEmpty)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: AppColors.warn.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(note, style: const TextStyle(fontSize: 12, color: AppColors.warn)),
+                ),
+              ...actions.map<Widget>((a) {
+                final id = a['id']?.toString() ?? '';
+                final label = a['label']?.toString() ?? '';
+                final explanation = a['explanation']?.toString() ?? '';
+                final safe = (a['safe'] as bool?) ?? true;
+                final target = a['target_entity']?.toString();
+                return Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(label, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+                        const SizedBox(height: 4),
+                        Text(explanation, style: const TextStyle(fontSize: 12, color: AppColors.muted)),
+                        if (target != null) ...[
+                          const SizedBox(height: 4),
+                          Text('1C entity: $target',
+                              style: const TextStyle(fontSize: 11, fontFamily: 'monospace', color: AppColors.muted)),
+                        ],
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            FilledButton(
+                              style: FilledButton.styleFrom(
+                                backgroundColor: safe ? AppColors.lime : AppColors.danger,
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                              ),
+                              onPressed: _busy ? null : () => _execute(id),
+                              child: Text(safe ? 'Виконати' : 'Виконати (небезпечно)'),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }),
+              if (_lastResult != null) ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: AppColors.surface,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: SelectableText(_lastResult!, style: const TextStyle(fontSize: 11, fontFamily: 'monospace')),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Закрити')),
+      ],
+    );
+  }
+
+  Future<void> _execute(String actionId) async {
+    setState(() {
+      _busy = true;
+      _lastResult = null;
+    });
+    try {
+      final r = await ref.read(reconRepoProvider).executeAction(widget.rowId, actionId);
+      setState(() {
+        _busy = false;
+        _lastResult = r.entries.map((e) => '${e.key}: ${e.value}').join('\n');
+      });
+    } catch (e) {
+      setState(() {
+        _busy = false;
+        _lastResult = 'Помилка: $e';
+      });
+    }
   }
 }
