@@ -151,17 +151,16 @@ class _TabContent extends ConsumerWidget {
           padding: const EdgeInsets.all(16),
           child: Card(
             child: SingleChildScrollView(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(minWidth: double.infinity),
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: DataTable(
-                    columnSpacing: 24,
-                    horizontalMargin: 16,
-                    columns: _columnsFor(subset),
-                    rows: filtered.map((r) => _rowFor(r, subset, context)).toList(),
-                  ),
-                ),
+              scrollDirection: Axis.horizontal,
+              child: PaginatedDataTable(
+                header: Text('${filtered.length} рядків',
+                    style: const TextStyle(fontSize: 14, color: AppColors.muted)),
+                columnSpacing: 24,
+                horizontalMargin: 16,
+                rowsPerPage: 50,
+                availableRowsPerPage: const [25, 50, 100, 200],
+                columns: _columnsFor(subset),
+                source: _RowsSource(filtered, subset, context, _rowFor),
               ),
             ),
           ),
@@ -299,6 +298,27 @@ class _TabContent extends ConsumerWidget {
         _ => AppColors.muted,
       };
 }
+
+class _RowsSource extends DataTableSource {
+  _RowsSource(this.rows, this.subset, this.context, this.rowBuilder);
+  final List<MatchRow> rows;
+  final List<String> subset;
+  final BuildContext context;
+  final DataRow Function(MatchRow r, List<String> subset, BuildContext ctx) rowBuilder;
+
+  @override
+  DataRow getRow(int index) => rowBuilder(rows[index], subset, context);
+
+  @override
+  int get rowCount => rows.length;
+
+  @override
+  bool get isRowCountApproximate => false;
+
+  @override
+  int get selectedRowCount => 0;
+}
+
 
 class _KindBadge extends StatelessWidget {
   const _KindBadge({required this.label, required this.color});
