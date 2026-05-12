@@ -393,8 +393,25 @@ async def rerun_session(session_id: str, session: AsyncSession = Depends(get_ses
     if not s:
         raise HTTPException(status_code=404, detail="Сесію не знайдено")
 
-    # Видаляємо старі рядки.
-    await session.execute(delete(MatchRow).where(MatchRow.session_id == session_id))
+    # ВАЖЛИВО: зберігаємо рядки які юзер вже підтвердив/відхилив (manual теж).
+    # Видаляємо ТІЛЬКИ pending (user_status IS NULL і manual = False).
+    preserved_q = await session.execute(
+        select(MatchRow).where(
+            MatchRow.session_id == session_id,
+            (MatchRow.user_status.is_not(None)) | (MatchRow.manual == True),  # noqa: E712
+        )
+    )
+    preserved_rows = list(preserved_q.scalars())
+    preserved_bank_ids = {r.bank_op_id for r in preserved_rows if r.bank_op_id}
+    preserved_cash_ids = {r.cash_op_id for r in preserved_rows if r.cash_op_id}
+    # Видаляємо непідтверджені/невідхилені рядки.
+    await session.execute(
+        delete(MatchRow).where(
+            MatchRow.session_id == session_id,
+            MatchRow.user_status.is_(None),
+            MatchRow.manual == False,  # noqa: E712
+        )
+    )
 
     # Bank в межах періоду, cash — ширше на ±dateWindow (затримка проводки в 1С).
     _w = timedelta(days=s.date_window_days)
@@ -405,7 +422,8 @@ async def rerun_session(session_id: str, session: AsyncSession = Depends(get_ses
             BankOp.op_date <= s.period_to,
         )
     )
-    bank_ops_db = list(bank_q.scalars())
+    # Виключаємо bank_ops які вже в preserved (підтверджені/відхилені/manual).
+    bank_ops_db = [b for b in bank_q.scalars() if b.id not in preserved_bank_ids]
     cash_q = await session.execute(
         select(CashOp).where(
             CashOp.fop_id == s.fop_id,
@@ -413,7 +431,7 @@ async def rerun_session(session_id: str, session: AsyncSession = Depends(get_ses
             CashOp.op_date <= s.period_to + _w,
         )
     )
-    cash_ops_db = list(cash_q.scalars())
+    cash_ops_db = [c for c in cash_q.scalars() if c.id not in preserved_cash_ids]
 
     bank_data = [
         BankOpData(
