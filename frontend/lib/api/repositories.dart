@@ -287,6 +287,23 @@ class ReconRepository {
     );
     return (r.data?['deleted'] as int?) ?? 0;
   }
+
+  /// Отримати preview доступних дій у 1С для рядка звірки.
+  Future<Map<String, dynamic>> previewActions(String rowId) async {
+    final r = await _api.get<Map<String, dynamic>>(
+      '/api/recon/rows/$rowId/actions-preview',
+    );
+    return r.data ?? {};
+  }
+
+  /// Виконати дію над рядком (Етап 1: тільки approve_no_op).
+  Future<Map<String, dynamic>> executeAction(String rowId, String actionId) async {
+    final r = await _api.post<Map<String, dynamic>>(
+      '/api/recon/rows/$rowId/execute-action',
+      query: {'action_id': actionId},
+    );
+    return r.data ?? {};
+  }
 }
 
 String _isoDate(DateTime d) =>

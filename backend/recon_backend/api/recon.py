@@ -660,3 +660,189 @@ async def explain_bank_only(
         "candidates_count": len(candidates),
         "candidates": candidates,
     }
+
+
+# ─── ДІЇ В 1С (Етап 1: preview only) ─────────────────────────────────
+
+
+@router.get("/rows/{row_id}/actions-preview")
+async def preview_row_actions(
+    row_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Повернути список ДОСТУПНИХ дій для рядка + preview що буде в 1С.
+
+    Поки що тільки preview — реальних POST в 1С НЕ робимо.
+    """
+    row = await session.get(MatchRow, row_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Рядок не знайдено")
+    s = await session.get(ReconSession, row.session_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="Сесію не знайдено")
+
+    bank = await session.get(BankOp, row.bank_op_id) if row.bank_op_id else None
+    cash = await session.get(CashOp, row.cash_op_id) if row.cash_op_id else None
+
+    # Резолвимо назви кас (для пояснень).
+    cash_acc_names: dict[str, str] = {}
+    cash_acc_refs: dict[str, str | None] = {}
+    cash_r = await session.execute(select(CashAccount).where(CashAccount.fop_id == s.fop_id))
+    for c in cash_r.scalars():
+        cash_acc_names[c.id] = c.name_1c
+        cash_acc_refs[c.id] = c.odata_ref
+
+    # Очікувана каса для bank-рахунку.
+    expected_cash_id = None
+    expected_cash_name = ""
+    if bank:
+        bank_acc = await session.get(BankAccount, bank.bank_account_id)
+        if bank_acc:
+            expected_cash_id = bank_acc.expected_cash_account_id
+            expected_cash_name = cash_acc_names.get(expected_cash_id or "", "")
+
+    actions = []
+
+    kind = row.kind.value if hasattr(row.kind, "value") else str(row.kind)
+
+    # ─── bank_only ───
+    if kind == "bank_only" and bank:
+        direction = bank.direction.value if hasattr(bank.direction, "value") else str(bank.direction)
+        if direction == "in":
+            actions.append({
+                "id": "create_pko",
+                "label": "🟢 Створити ПКО",
+                "explanation": f"Створити ПКО на касі «{expected_cash_name}» сумою {bank.amount} грн від {bank.counterparty or '?'}.",
+                "target_entity": "Document_ПоступлениеВКассу",
+                "payload": {
+                    "Date": bank.op_date.isoformat(),
+                    "Касса_Key": cash_acc_refs.get(expected_cash_id or ""),
+                    "СуммаДокумента": str(bank.amount),
+                    "Контрагент_Description": bank.counterparty,
+                    "Комментарий": f"Створено автоматично з виписки Privat {bank.op_date}",
+                },
+                "safe": True,
+            })
+        else:  # out
+            actions.append({
+                "id": "create_vko",
+                "label": "🔴 Створити ВКО",
+                "explanation": f"Створити ВКО з каси «{expected_cash_name}» сумою {bank.amount} грн на {bank.counterparty or '?'}.",
+                "target_entity": "Document_РасходИзКассы",
+                "payload": {
+                    "Date": bank.op_date.isoformat(),
+                    "Касса_Key": cash_acc_refs.get(expected_cash_id or ""),
+                    "СуммаДокумента": str(bank.amount),
+                    "Контрагент_Description": bank.counterparty,
+                    "Комментарий": f"Створено автоматично з виписки Privat {bank.op_date}",
+                },
+                "safe": True,
+            })
+            actions.append({
+                "id": "create_transfer_to_cash",
+                "label": "🔁 Створити переміщення банк→готівка",
+                "explanation": "Якщо це банкоматне зняття — створити переміщення з банк-каси у готівкову касу.",
+                "target_entity": "Document_ПеремещениеДС",
+                "payload": {
+                    "Date": bank.op_date.isoformat(),
+                    "СчетОтправитель_Key": cash_acc_refs.get(expected_cash_id or ""),
+                    "СуммаДокумента": str(bank.amount),
+                    "Комментарий": f"Зняття готівки з банкомату {bank.op_date}",
+                },
+                "safe": True,
+            })
+
+    # ─── peresort ───
+    if kind == "peresort" and bank and cash:
+        actual_cash_name = cash_acc_names.get(cash.cash_account_id, "")
+        cash_doc_type = cash.op_type.value if hasattr(cash.op_type, "value") else str(cash.op_type)
+        actions.append({
+            "id": "delete_and_recreate",
+            "label": "🔄 Видалити старий + створити новий на правильну касу",
+            "explanation": f"Видалить документ №{cash.doc_number} з каси «{actual_cash_name}» і створить новий на «{expected_cash_name}».",
+            "target_entity": "Document_*",
+            "payload": {
+                "old_doc_ref": cash.odata_ref,
+                "old_cash_account": actual_cash_name,
+                "new_cash_account": expected_cash_name,
+                "amount": str(cash.amount),
+                "date": cash.op_date.isoformat(),
+            },
+            "safe": False,  # ВИДАЛЕННЯ — небезпечно
+        })
+        actions.append({
+            "id": "create_correction_transfer",
+            "label": "🔁 Створити коригуюче переміщення",
+            "explanation": f"Створить переміщення «{actual_cash_name}» → «{expected_cash_name}» сумою {cash.amount} грн, щоб гроші опинились де треба, без видалення оригіналу.",
+            "target_entity": "Document_ПеремещениеДС",
+            "payload": {
+                "Date": cash.op_date.isoformat(),
+                "КассаОтправитель_Key": cash_acc_refs.get(cash.cash_account_id),
+                "КассаПолучатель_Key": cash_acc_refs.get(expected_cash_id or ""),
+                "СуммаДокумента": str(cash.amount),
+                "Комментарий": f"Коригування пересорту до {cash.doc_number}",
+            },
+            "safe": True,
+        })
+
+    # ─── cash_only ───
+    if kind == "cash_only" and cash:
+        actual_cash_name = cash_acc_names.get(cash.cash_account_id, "")
+        actions.append({
+            "id": "delete_cash_doc",
+            "label": "❌ Видалити документ з 1С",
+            "explanation": f"Видалить документ №{cash.doc_number} ({cash.op_type}) з каси «{actual_cash_name}». Тільки якщо його там не мало бути.",
+            "target_entity": "Document_*",
+            "payload": {"doc_ref": cash.odata_ref, "cash_account": actual_cash_name},
+            "safe": False,  # ВИДАЛЕННЯ — небезпечно
+        })
+
+    # ─── Універсальні: підтвердити/відхилити без змін у 1С ───
+    actions.append({
+        "id": "approve_no_op",
+        "label": "✅ Підтвердити (без змін у 1С)",
+        "explanation": "Позначити рядок як перевірений. У 1С нічого не зміниться.",
+        "target_entity": None,
+        "payload": {},
+        "safe": True,
+    })
+
+    return {
+        "row_id": row_id,
+        "kind": kind,
+        "actions": actions,
+        "note": "Це ПРЕВ'Ю — реального POST у 1С зараз НЕ виконується. Етап 2 додасть це.",
+    }
+
+
+@router.post("/rows/{row_id}/execute-action")
+async def execute_row_action(
+    row_id: str,
+    action_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Виконати дію над рядком.
+
+    Етап 1: реалізовано тільки `approve_no_op` (просто mark approved у БД).
+    Етап 2: створення документів через OData POST.
+    Етап 3: видалення / редагування документів.
+    """
+    row = await session.get(MatchRow, row_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Рядок не знайдено")
+
+    if action_id == "approve_no_op":
+        from datetime import datetime
+        row.user_status = "approved"
+        row.approved = True
+        row.approved_at = datetime.utcnow()
+        await session.commit()
+        return {"executed": True, "action": action_id, "note": "Підтверджено, без змін у 1С."}
+
+    # Решта дій — поки що не реалізовано (Етап 2).
+    return {
+        "executed": False,
+        "action": action_id,
+        "error": "Ця дія потребує OData POST у 1С — буде реалізована у Етапі 2.",
+        "todo": "Підтримай зворотній зв'язок: чи виконувати на копії Fish для тесту?",
+    }
