@@ -14,6 +14,9 @@ final _rowsProvider =
   return ref.read(reconRepoProvider).rows(args.sessionId, kind: args.kind);
 });
 
+/// Фільтр звірки по касі. null = всі каси.
+final _cashFilterProvider = StateProvider<String?>((ref) => null);
+
 class ReconViewScreen extends ConsumerStatefulWidget {
   const ReconViewScreen({super.key, required this.sessionId});
   final String sessionId;
@@ -51,10 +54,45 @@ class _ReconViewScreenState extends ConsumerState<ReconViewScreen> with TickerPr
 
   @override
   Widget build(BuildContext context) {
+    final filterCashId = ref.watch(_cashFilterProvider);
+    final cashesAsync = ref.watch(cashAccountsProvider);
     return Scaffold(
       appBar: AppBar(
         title: const Text('Звірка'),
         actions: [
+          // Dropdown фільтр по касі — обмежує перегляд однією касою.
+          cashesAsync.maybeWhen(
+            data: (cashes) {
+              // Тільки каси які намапленні з банк-рахунків — інші не релевантні.
+              final banksAsync = ref.watch(bankAccountsProvider);
+              final mapped = banksAsync.maybeWhen(
+                data: (banks) => banks
+                    .where((b) => b.expectedCashAccountId != null)
+                    .map((b) => b.expectedCashAccountId!)
+                    .toSet(),
+                orElse: () => <String>{},
+              );
+              final available = cashes.where((c) => mapped.contains(c.id)).toList();
+              if (available.isEmpty) return const SizedBox.shrink();
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: DropdownButton<String?>(
+                  value: filterCashId,
+                  hint: const Text('Каса: всі', style: TextStyle(fontSize: 12)),
+                  underline: const SizedBox.shrink(),
+                  items: [
+                    const DropdownMenuItem<String?>(value: null, child: Text('Каса: всі')),
+                    ...available.map((c) => DropdownMenuItem<String?>(
+                          value: c.id,
+                          child: Text(c.name1c, style: const TextStyle(fontSize: 13)),
+                        )),
+                  ],
+                  onChanged: (v) => ref.read(_cashFilterProvider.notifier).state = v,
+                ),
+              );
+            },
+            orElse: () => const SizedBox.shrink(),
+          ),
           IconButton(
             tooltip: 'Перерахувати — заново зматчити цю сесію з поточними даними',
             icon: _busy
@@ -109,19 +147,27 @@ class _TabContent extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Завантажуємо всі рядки сесії і фільтруємо за subset (бо вкладка «Збіги» = exact + fuzzy).
+    // Завантажуємо всі рядки сесії і фільтруємо за subset.
     final rowsAsync = ref.watch(_rowsProvider((sessionId: sessionId, kind: null)));
+    final filterCashId = ref.watch(_cashFilterProvider);
     return rowsAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (e, _) => Center(child: Text('$e')),
       data: (rows) {
-        // Збираємо expected_cash_account_ids — це каси куди мапляться банк-рахунки.
-        // Переміщення які стосуються цих кас — релевантні для звірки (з/у банк).
-        // Переміщення між іншими (готівка ↔ готівка) — внутрішні, ховаємо.
+        // expected_cash_account_ids — каси куди мапляться банк-рахунки.
         final bankExpected = ref.watch(bankAccountsProvider).maybeWhen(
           data: (banks) => banks
               .where((b) => b.expectedCashAccountId != null)
               .map((b) => b.expectedCashAccountId!)
+              .toSet(),
+          orElse: () => <String>{},
+        );
+        // Якщо фільтр по касі — також треба знати які bank_accounts мапляться
+        // на ту касу (щоб відфільтрувати bank_only рядки правильно).
+        final banksForFilterCash = ref.watch(bankAccountsProvider).maybeWhen(
+          data: (banks) => banks
+              .where((b) => b.expectedCashAccountId == filterCashId)
+              .map((b) => b.id)
               .toSet(),
           orElse: () => <String>{},
         );
@@ -130,12 +176,17 @@ class _TabContent extends ConsumerWidget {
           if (!subset.contains(r.kind)) return false;
           if (r.kind == 'cash_only') {
             final cashAcc = (r.cashOp ?? {})['cash_account_id']?.toString() ?? '';
-            // У вкладці «Питання» показуємо ТІЛЬКИ операції тих кас,
-            // які мапляться з банк-рахунків. Інші каси (Касса Руслан,
-            // Касса Таня тощо) — не стосуються звірки з твоїм Privat.
-            if (!bankExpected.contains(cashAcc)) {
-              return false;
-            }
+            if (!bankExpected.contains(cashAcc)) return false;
+          }
+          // Фільтр по касі: показуємо рядок якщо стосується обраної каси
+          // (через cash_op.cash_account_id або через bank_op.bank_account_id
+          // що мапиться на цю касу).
+          if (filterCashId != null) {
+            final cashAcc = (r.cashOp ?? {})['cash_account_id']?.toString();
+            final bankAcc = (r.bankOp ?? {})['bank_account_id']?.toString();
+            final cashMatch = cashAcc == filterCashId;
+            final bankMatch = bankAcc != null && banksForFilterCash.contains(bankAcc);
+            if (!cashMatch && !bankMatch) return false;
           }
           return true;
         }).toList();
